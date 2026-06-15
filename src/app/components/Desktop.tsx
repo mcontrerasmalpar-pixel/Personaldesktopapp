@@ -74,9 +74,11 @@ function getCapsuleState(): CapsuleState {
 interface Props {
   username: string;
   initialMood?: number;
+  journalText?: string;
+  onJournalSaved?: (text: string) => void;
 }
 
-export function Desktop({ username, initialMood }: Props) {
+export function Desktop({ username, initialMood, journalText = "", onJournalSaved }: Props) {
   const [windows, setWindows] = useState<Record<WindowId, WindowState>>(
     Object.fromEntries(
       WINDOW_CONFIGS.map((c, i) => [c.id, { id: c.id, open: false, minimized: false, zIndex: 100 + i }])
@@ -144,12 +146,14 @@ export function Desktop({ username, initialMood }: Props) {
 
   const PET_JOURNAL_REACTIONS = ["that sounds hard", "I'm proud of you", "yay!", "thank you for sharing", "I'm here with you", "you did that", "this matters"];
 
-  const handleJournalSaved = useCallback((_text: string) => {
+  const handleJournalSaved = useCallback((text: string) => {
+    // Bubble up to App.tsx so text persists across window open/close
+    onJournalSaved?.(text);
     if (petThoughtTimer.current) clearTimeout(petThoughtTimer.current);
     const msg = PET_JOURNAL_REACTIONS[Math.floor(Math.random() * PET_JOURNAL_REACTIONS.length)];
     setPetThought(msg);
     petThoughtTimer.current = setTimeout(() => setPetThought(null), 4000);
-  }, []);
+  }, [onJournalSaved]);
 
   const handleIntentionComplete = useCallback(() => {
     setIntentionJustCompleted(true);
@@ -290,6 +294,7 @@ export function Desktop({ username, initialMood }: Props) {
               username={username}
               currentMood={selectedMood ?? undefined}
               companion={companion}
+              journalText={journalText}
               onAllIntentionsComplete={handleAllIntentionsComplete}
               onIntentionComplete={handleIntentionComplete}
               onOpenJournal={() => openWindow("journal")}
@@ -337,7 +342,7 @@ export function Desktop({ username, initialMood }: Props) {
         />
       )}
 
-      {/* Memorama gate */}
+      {/* Memorama gate for Memories */}
       {showMemorama && (
         <CatMemorama mood={selectedMood ?? undefined} onComplete={handleMemoramaComplete} onClose={() => setShowMemorama(false)} />
       )}
@@ -440,8 +445,9 @@ export function Desktop({ username, initialMood }: Props) {
 }
 
 /* ─── WindowContent ──────────────────────────────────────────────────────── */
-function WindowContent({ id, username, currentMood, companion, onAllIntentionsComplete, onIntentionComplete, onOpenJournal, onOpenGoals, onAllGoalsSaved, onJournalSaved }: {
+function WindowContent({ id, username, currentMood, companion, journalText, onAllIntentionsComplete, onIntentionComplete, onOpenJournal, onOpenGoals, onAllGoalsSaved, onJournalSaved }: {
   id: WindowId; username: string; currentMood?: number; companion?: string;
+  journalText?: string;
   onAllIntentionsComplete?: () => void; onIntentionComplete?: () => void;
   onOpenJournal?: () => void; onOpenGoals?: () => void;
   onAllGoalsSaved?: () => void; onJournalSaved?: (text: string) => void;
@@ -459,7 +465,13 @@ function WindowContent({ id, username, currentMood, companion, onAllIntentionsCo
         />
       );
     case "memories":  return <MemoriesWindow />;
-    case "journal":   return <JournalWindow onJournalSaved={onJournalSaved} />;
+    case "journal":   return (
+      <JournalWindow
+        mood={currentMood}
+        initialText={journalText}
+        onJournalSaved={onJournalSaved}
+      />
+    );
     case "goals":     return <GoalsWindow onAllGoalsSaved={onAllGoalsSaved} />;
     default:          return null;
   }
