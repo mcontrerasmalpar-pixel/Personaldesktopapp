@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { CatMemorama } from "../CatMemorama";
 
 const RANSOM_FONTS = [
   "Alfa Slab One",
@@ -76,11 +77,15 @@ function RansomTitle({ text }: { text: string }) {
 }
 
 interface Props {
+  initialText?: string;
+  mood?: number;
   onJournalSaved?: (text: string) => void;
 }
 
-export function JournalWindow({ onJournalSaved }: Props) {
-  const [text, setText] = useState("");
+export function JournalWindow({ initialText = "", mood, onJournalSaved }: Props) {
+  // Gate: user must complete the cat memorama to unlock the journal
+  const [unlocked, setUnlocked] = useState(false);
+  const [text, setText] = useState(initialText);
   const [saved, setSaved] = useState(false);
 
   const dateStr = new Date().toLocaleDateString("en-US", {
@@ -92,6 +97,16 @@ export function JournalWindow({ onJournalSaved }: Props) {
     onJournalSaved?.(text);
     setTimeout(() => setSaved(false), 2000);
   };
+
+  // Show the CatMemorama gate before the journal
+  if (!unlocked) {
+    return (
+      <CatMemorama
+        mood={mood}
+        onComplete={() => setUnlocked(true)}
+      />
+    );
+  }
 
   return (
     <div style={{

@@ -10,6 +10,8 @@ export default function App() {
   const [username, setUsername] = useState("");
   const [initialMood, setInitialMood] = useState<number | undefined>(undefined);
   const [canvasSnapshot, setCanvasSnapshot] = useState<string | null>(null);
+  // Persist journal text across window open/close sessions
+  const [journalText, setJournalText] = useState("");
 
   const handleLogin = (name: string, snapshot: string | null) => {
     setUsername(name);
@@ -79,7 +81,14 @@ export default function App() {
       <div style={{ width: "100%", height: "100vh", overflow: "hidden" }}>
         {stage === "login"   && <LoginScreen onLogin={handleLogin} />}
         {stage === "mood"    && <MoodScreen username={username} companionId={companionId} canvasSnapshot={canvasSnapshot} onComplete={handleMoodComplete} />}
-        {stage === "desktop" && <Desktop username={username} initialMood={initialMood} />}
+        {stage === "desktop" && (
+          <Desktop
+            username={username}
+            initialMood={initialMood}
+            journalText={journalText}
+            onJournalSaved={setJournalText}
+          />
+        )}
       </div>
     </>
   );

@@ -32,8 +32,52 @@ function padDate(y: number, m: number, d: number) {
 
 const EMPTY_FORM = { caption: "", emoji: "📷", color: COLOR_OPTIONS[0], prompt: "" };
 
+// Demo memories preloaded so the calendar doesn't feel empty on first visit
+function buildDemoMemories(): DayMemory[] {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  return [
+    {
+      date: padDate(y, m, 1),
+      emoji: "🌸",
+      color: "#ffc8dd",
+      caption: "first day of the month, fresh start",
+      prompt: "what made you smile today?",
+    },
+    {
+      date: padDate(y, m, 5),
+      emoji: "☕",
+      color: "#f9dcc4",
+      caption: "slow morning, good coffee",
+      prompt: "a moment of calm",
+    },
+    {
+      date: padDate(y, m, 10),
+      emoji: "🎨",
+      color: "#cdb4db",
+      caption: "worked on the app all day",
+      prompt: "building something that matters",
+    },
+    {
+      date: padDate(y, m, Math.max(now.getDate() - 2, 11)),
+      emoji: "✨",
+      color: "#b5ead7",
+      caption: "almost there",
+      prompt: "what are you proud of?",
+    },
+    {
+      date: todayStr(),
+      emoji: "💻",
+      color: "#c8e4ff",
+      caption: "competition day!",
+      prompt: "you've got this 🚀",
+    },
+  ];
+}
+
 export function MemoriesWindow() {
-  const [memories, setMemories] = useState<DayMemory[]>([]);
+  const [memories, setMemories] = useState<DayMemory[]>(() => buildDemoMemories());
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<{ date: string; memory: DayMemory | null } | null>(null);
   const [addOpen, setAddOpen] = useState(false);
