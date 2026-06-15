@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { getCompanionIdleImage } from "./PixelPet";
+import { PixelPet } from "./PixelPet";
 
 const POETIC_PHRASES: Record<string, string[]> = {
   sunny_hot:     ["the sun showed up for you today", "a good day to exist outside", "golden hour starts early today"],
@@ -8,11 +8,11 @@ const POETIC_PHRASES: Record<string, string[]> = {
   partly_cloudy: ["soft light, no harsh shadows", "clouds are just the sky being thoughtful", "perfect light for photos"],
   rainy:         ["rain is just the sky journaling", "good day for something cosy", "let it rain. you're inside."],
   cold:          ["bundle up, the world is cold today", "a blanket day if there ever was one", "warm drink first, everything else after"],
-  default:       ["whatever the sky is doing, you're here ✦", "the weather is just the background today"],
+  default:       ["whatever the sky is doing, you're here \u2726", "the weather is just the background today"],
 };
 
 const WEATHER_EMOJIS: Record<string, string> = {
-  sunny_hot: "☀️", sunny_mild: "🌤", partly_cloudy: "⛅", cloudy: "☁️", rainy: "🌧", cold: "🌨",
+  sunny_hot: "\u2600\uFE0F", sunny_mild: "\uD83C\uDF24", partly_cloudy: "\u26C5", cloudy: "\u2601\uFE0F", rainy: "\uD83C\uDF27", cold: "\uD83C\uDF28",
 };
 
 const DESCS: Record<string, string> = {
@@ -71,57 +71,49 @@ export function WeatherWidget({ companionId = "cat" }: { companionId?: string })
     document.addEventListener("mouseup", up);
   };
 
-  const petImg = getCompanionIdleImage(companionId);
-  const emoji  = weather ? (WEATHER_EMOJIS[weather.key] ?? "🌤") : "🌤";
+  const emoji = weather ? (WEATHER_EMOJIS[weather.key] ?? "\uD83C\uDF24") : "\uD83C\uDF24";
 
   return (
     <div style={{
       position: "fixed", left: pos.x, top: pos.y, width: 210,
       zIndex: 300, userSelect: "none",
-      border: "2px solid",
-      borderColor: "#fff #555 #555 #fff",
+      border: "2px solid", borderColor: "#fff #555 #555 #fff",
       boxShadow: "4px 4px 8px rgba(0,0,0,0.35)",
     }}>
-      {/* Title bar — Windows pixel style */}
-      <div
-        onMouseDown={handleBarMouseDown}
-        style={{
-          background: "linear-gradient(90deg, #000080, #1084D0)",
-          color: "#fff",
-          padding: "4px 8px",
-          fontFamily: "'VT323', monospace",
-          fontSize: 17,
-          cursor: "grab",
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
+      <div onMouseDown={handleBarMouseDown} style={{
+        background: "linear-gradient(90deg, #000080, #1084D0)",
+        color: "#fff", padding: "4px 8px",
+        fontFamily: "'VT323', monospace", fontSize: 17,
+        cursor: "grab", display: "flex", alignItems: "center", gap: 6,
+      }}>
         {emoji} weather
       </div>
 
-      {/* Content — unchanged inner style */}
       <div style={{ background: "#FFFDF6", padding: "10px 12px", fontFamily: "'Fraunces', serif" }}>
         {loading && <div style={{ fontSize: 13, color: "#264653", opacity: 0.5, fontStyle: "italic" }}>reaching the sky...</div>}
 
         {error && (
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <img src={petImg} style={{ width: 32, height: 40, imageRendering: "pixelated" }} alt="" />
-            <div style={{ fontSize: 13, color: "#264653", opacity: 0.6 }}>check the window instead 🪟</div>
+            <div style={{ transform: "scale(0.28)", transformOrigin: "left center", width: 34, height: 28, overflow: "hidden", flexShrink: 0 }}>
+              <PixelPet companionId={companionId} />
+            </div>
+            <div style={{ fontSize: 13, color: "#264653", opacity: 0.6 }}>check the window instead \uD83E\uDEDF</div>
           </div>
         )}
 
         {weather && (
           <>
             <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
-              <span style={{ fontSize: 38, lineHeight: 1, color: "#264653", fontWeight: 300 }}>{weather.temp}°</span>
+              <span style={{ fontSize: 38, lineHeight: 1, color: "#264653", fontWeight: 300 }}>{weather.temp}\u00b0</span>
               <span style={{ fontSize: 13, color: "#264653", opacity: 0.6 }}>{weather.desc}</span>
             </div>
             <div style={{ fontSize: 13, fontStyle: "italic", color: "#264653", opacity: 0.75, lineHeight: 1.4, borderTop: "1px solid rgba(38,70,83,0.1)", paddingTop: 6, marginTop: 4 }}>
               {weather.phrase}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-              <img src={petImg} style={{ width: 28, height: 34, imageRendering: "pixelated" }} alt="" />
+              <div style={{ transform: "scale(0.28)", transformOrigin: "left center", width: 34, height: 28, overflow: "hidden", flexShrink: 0 }}>
+                <PixelPet companionId={companionId} />
+              </div>
               <span style={{ fontSize: 11, color: "#264653", opacity: 0.4, letterSpacing: 0.3 }}>Brussels, BE</span>
             </div>
           </>

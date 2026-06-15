@@ -17,7 +17,8 @@ export function LoginScreen({ onLogin }: Props) {
   const dragGainRef    = useRef<GainNode | null>(null);
   const strokeColorRef = useRef(0);
   const isDrawingRef   = useRef(false);
-  const lastPosRef     = useRef<{ x: number; y: number } | null>(null);
+  // Guardamos todos los puntos del trazo actual para suavizarlo con quadraticCurveTo
+  const pointsRef      = useRef<{ x: number; y: number }[]>([]);
 
   const blobsRef = useRef<{ x: number; y: number; r: number; color: string; points: number[]; opacity: number }[]>([]);
   const rafRef   = useRef<number>(0);
@@ -29,7 +30,7 @@ export function LoginScreen({ onLogin }: Props) {
   const [showCompanionPicker, setShowCompanionPicker] = useState(false);
   const [pendingUsername, setPendingUsername]         = useState("");
 
-  // ── Canvas resize ────────────────────────────────────────────────────────
+  // ── Canvas resize
   useEffect(() => {
     const resize = () => {
       const canvas = canvasRef.current;
@@ -42,7 +43,7 @@ export function LoginScreen({ onLogin }: Props) {
     return () => window.removeEventListener("resize", resize);
   }, []);
 
-  // ── Blob animation ───────────────────────────────────────────────────────
+  // ── Blob animation
   useEffect(() => {
     const tick = () => {
       const canvas = blobCanvasRef.current;
@@ -74,7 +75,7 @@ export function LoginScreen({ onLogin }: Props) {
     return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
-  // ── Audio ────────────────────────────────────────────────────────────────
+  // ── Audio
   const initAudio = () => {
     if (!audioCtxRef.current)
       audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -114,7 +115,7 @@ export function LoginScreen({ onLogin }: Props) {
     dragOscRef.current = null; dragGainRef.current = null;
   };
 
-  // ── Drawing ──────────────────────────────────────────────────────────────
+  // ── Drawing helpers
   const spawnBlob = (x: number, y: number) => {
     const r = 30 + Math.random() * 40; const n = 12; const points: number[] = [];
     for (let i = 0; i < n; i++) points.push(Math.random() * 15 - 7, 0);
@@ -125,65 +126,85 @@ export function LoginScreen({ onLogin }: Props) {
     return { x: clientX - (rect?.left ?? 0), y: clientY - (rect?.top ?? 0) };
   };
 
+  // Redibuja el trazo completo suavizado con quadraticCurveTo — sin puntos ni artefactos
+  const redrawStroke = useCallback(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!ctx || !canvas) return;
+    const pts = pointsRef.current;
+    if (pts.length < 2) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const color = TOMODACHI[strokeColorRef.current % TOMODACHI.length];
+    ctx.strokeStyle = color;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = color;
+    ctx.lineWidth = 6;
+
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const mx = (pts[i].x + pts[i + 1].x) / 2;
+      const my = (pts[i].y + pts[i + 1].y) / 2;
+      ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+    }
+    const last = pts[pts.length - 1];
+    ctx.lineTo(last.x, last.y);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }, []);
+
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     initAudio();
-    const { x, y } = getCanvasPos(e.clientX, e.clientY);
+    const pos = getCanvasPos(e.clientX, e.clientY);
     isDrawingRef.current = true;
-    lastPosRef.current = { x, y };
-    // FIX: beginPath + moveTo aquí, sin lineTo todavía — evita el punto inicial
-    const ctx = canvasRef.current?.getContext("2d");
-    if (ctx) { ctx.beginPath(); ctx.moveTo(x, y); }
-    startDragTone(yToFreq(y));
+    pointsRef.current = [pos];
+    startDragTone(yToFreq(pos.y));
   }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isDrawingRef.current) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!ctx || !canvas) return;
-    const { x, y } = getCanvasPos(e.clientX, e.clientY);
-    const last = lastPosRef.current;
-    // FIX: si no hay last, solo mueve sin dibujar — evita punto al reanudar
-    if (!last) { ctx.beginPath(); ctx.moveTo(x, y); lastPosRef.current = { x, y }; return; }
-    const dx = x - last.x, dy = y - last.y;
-    const speed = Math.sqrt(dx * dx + dy * dy);
-    // Solo dibuja si hay movimiento real (evita punto estático)
-    if (speed < 0.5) return;
-    const lw = Math.max(2, Math.min(12, 20 - speed * 0.3));
-    const color = TOMODACHI[strokeColorRef.current % TOMODACHI.length];
-    ctx.lineWidth = lw; ctx.strokeStyle = color;
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.shadowBlur = 12; ctx.shadowColor = color;
-    ctx.lineTo(x, y); ctx.stroke();
-    ctx.shadowBlur = 0;
-    // FIX: beginPath + moveTo después de stroke para no acumular path anterior
-    ctx.beginPath(); ctx.moveTo(x, y);
-    updateDragTone(yToFreq(y), speed);
-    lastPosRef.current = { x, y };
-  }, []);
+    const pos = getCanvasPos(e.clientX, e.clientY);
+    const pts = pointsRef.current;
+    const last = pts[pts.length - 1];
+    if (last) {
+      const dx = pos.x - last.x, dy = pos.y - last.y;
+      const speed = Math.sqrt(dx * dx + dy * dy);
+      if (speed < 1) return; // ignora micromovimientos
+      updateDragTone(yToFreq(pos.y), speed);
+    }
+    pts.push(pos);
+    redrawStroke();
+  }, [redrawStroke]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (!isDrawingRef.current) return;
-    const { x, y } = getCanvasPos(e.clientX, e.clientY);
-    const last = lastPosRef.current;
-    const dist = last ? Math.hypot(x - last.x, y - last.y) : 0;
-    if (dist < 6) { spawnBlob(x, y); playTone(yToFreq(y)); }
-    else { strokeColorRef.current++; }
-    const ctx = canvasRef.current?.getContext("2d");
-    if (ctx) ctx.beginPath();
+    const pos = getCanvasPos(e.clientX, e.clientY);
+    const pts = pointsRef.current;
+    if (pts.length <= 2) {
+      // Click sin arrastre → blob
+      spawnBlob(pos.x, pos.y);
+      playTone(yToFreq(pos.y));
+      // Limpia el canvas de ese punto
+      const ctx = canvasRef.current?.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, canvasRef.current!.width, canvasRef.current!.height);
+    } else {
+      strokeColorRef.current++;
+    }
     stopDragTone();
     isDrawingRef.current = false;
-    lastPosRef.current = null;
+    pointsRef.current = [];
   }, []);
 
   const handleMouseLeave = useCallback(() => {
     if (!isDrawingRef.current) return;
-    const ctx = canvasRef.current?.getContext("2d");
-    if (ctx) ctx.beginPath();
+    if (pointsRef.current.length > 2) strokeColorRef.current++;
     stopDragTone();
     isDrawingRef.current = false;
-    lastPosRef.current = null;
-    strokeColorRef.current++;
+    pointsRef.current = [];
   }, []);
 
   const toMouse = (touch: React.Touch) => ({ clientX: touch.clientX, clientY: touch.clientY });
