@@ -2,19 +2,27 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { LANGUAGE_OPTIONS, resolveLanguage } from "./quotes";
 
-// Scratch-card reveal experience:
-// ─ Canvas layer 1 (bottom): beautiful nature image + quote text centered
-// ─ Canvas layer 2 (top):    solid dark overlay
-// Movement from camera (or mouse) erases the dark layer → revealing the image + quote beneath
-// Like scratching a lottery card with your body.
+// Minesweeper-style tile reveal experience
+// Grid of Win95 tiles covers the screen
+// Camera motion in a zone flips that tile open → reveals nature image + quote beneath
 
 const NATURE_IMAGES = [
-  "https://images.unsplash.com/photo-1490750967868-88df5691cc99?w=1600&q=80", // pink flowers field
-  "https://images.unsplash.com/photo-1465146344425-f00d5f5c8f07?w=1600&q=80", // orange wildflowers
-  "https://images.unsplash.com/photo-1497250681960-ef046c08a56e?w=1600&q=80", // misty forest
-  "https://images.unsplash.com/photo-1501854140801-50d01698950b?w=1600&q=80", // aerial mountain meadow
-  "https://images.unsplash.com/photo-1470770841072-f978cf4d019e?w=1600&q=80", // lake reflection
+  "https://images.unsplash.com/photo-1490750967868-88df5691cc99?w=1600&q=80",
+  "https://images.unsplash.com/photo-1465146344425-f00d5f5c8f07?w=1600&q=80",
+  "https://images.unsplash.com/photo-1501854140801-50d01698950b?w=1600&q=80",
+  "https://images.unsplash.com/photo-1470770841072-f978cf4d019e?w=1600&q=80",
+  "https://images.unsplash.com/photo-1432958576632-8a39f6b97dc7?w=1600&q=80",
 ];
+
+const TILE_SIZE = 52; // px per tile
+
+interface Tile {
+  col: number;
+  row: number;
+  revealed: boolean;
+  flipProgress: number; // 0 = closed, 1 = open
+  wordIndex: number;    // which quote word appears here (-1 = none)
+}
 
 interface Props {
   quote: string;
@@ -24,228 +32,235 @@ interface Props {
 }
 
 export function FallingLetters({ quote, language, onComplete, onClose }: Props) {
-  const overlayCanvasRef = useRef<HTMLCanvasElement>(null); // dark scratch layer
-  const videoRef         = useRef<HTMLVideoElement>(null);
-  const motionCanvasRef  = useRef<HTMLCanvasElement>(null);
-  const streamRef        = useRef<MediaStream | null>(null);
-  const rafRef           = useRef<number>(0);
-  const prevFrameRef     = useRef<Uint8ClampedArray | null>(null);
-  const cameraReadyRef   = useRef(false);
-  const frameRef         = useRef(0);
-  const revealedRef      = useRef(0); // 0→1 percentage revealed
-  const imgRef           = useRef<HTMLImageElement | null>(null);
-  const imgLoadedRef     = useRef(false);
-  const brushSizeRef     = useRef(90); // radius of scratch brush
+  const canvasRef       = useRef<HTMLCanvasElement>(null);
+  const videoRef        = useRef<HTMLVideoElement>(null);
+  const motionCanvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef       = useRef<MediaStream | null>(null);
+  const rafRef          = useRef<number>(0);
+  const prevFrameRef    = useRef<Uint8ClampedArray | null>(null);
+  const cameraReadyRef  = useRef(false);
+  const frameRef        = useRef(0);
+  const imgRef          = useRef<HTMLImageElement | null>(null);
+  const imgLoadedRef    = useRef(false);
+  const tilesRef        = useRef<Tile[][]>([]);
+  const revealedCountRef = useRef(0);
+  const totalTilesRef    = useRef(1);
+  const imageUrl = useRef(NATURE_IMAGES[Math.floor(Math.random() * NATURE_IMAGES.length)]);
 
   const [cameraState, setCameraState] = useState<"idle" | "requesting" | "active" | "error" | "denied">("idle");
   const [showSave, setShowSave]       = useState(false);
   const [hint, setHint]               = useState(true);
 
-  // Pick a random nature image
-  const imageUrl = useRef(NATURE_IMAGES[Math.floor(Math.random() * NATURE_IMAGES.length)]);
-
   const resolvedLang = resolveLanguage(language);
   const langOpt = LANGUAGE_OPTIONS.find(l => l.id === resolvedLang);
+  const words = quote.split(" ").filter(Boolean);
 
-  // ── Draw the base scene (image + quote) on a separate offscreen canvas
-  const baseCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // ── Build tile grid
+  const buildGrid = useCallback((cols: number, rows: number) => {
+    const total = cols * rows;
+    totalTilesRef.current = total;
 
-  const buildBaseCanvas = useCallback(() => {
-    const W = window.innerWidth;
-    const H = window.innerHeight;
-    const base = document.createElement("canvas");
-    base.width  = W;
-    base.height = H;
-    const ctx = base.getContext("2d")!;
-
-    // Draw image cover-fit
-    if (imgRef.current && imgLoadedRef.current) {
-      const img = imgRef.current;
-      const iw = img.naturalWidth, ih = img.naturalHeight;
-      const scale = Math.max(W / iw, H / ih);
-      const dw = iw * scale, dh = ih * scale;
-      const dx = (W - dw) / 2, dy = (H - dh) / 2;
-      ctx.drawImage(img, dx, dy, dw, dh);
-    } else {
-      // Fallback gradient
-      const g = ctx.createLinearGradient(0, 0, W, H);
-      g.addColorStop(0, "#1a0533");
-      g.addColorStop(0.5, "#2d1b69");
-      g.addColorStop(1, "#0d3b2e");
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, W, H);
-    }
-
-    // Dark overlay on image so quote is readable
-    ctx.fillStyle = "rgba(0,0,0,0.38)";
-    ctx.fillRect(0, 0, W, H);
-
-    // Quote text — centered, word wrap, beautiful
-    const words = quote.split(" ");
-    const maxW  = Math.min(700, W * 0.75);
-    const lineH = 62;
-    ctx.textAlign    = "center";
-    ctx.textBaseline = "middle";
-
-    // Build lines
-    const lines: string[] = [];
-    let current = "";
-    ctx.font = "italic 400 42px 'Fraunces', serif";
-    for (const w of words) {
-      const test = current ? current + " " + w : w;
-      if (ctx.measureText(test).width > maxW && current) {
-        lines.push(current);
-        current = w;
-      } else {
-        current = test;
+    // Pick evenly-spaced tiles to show each word
+    const wordTileIndices = new Set<number>();
+    if (words.length > 0) {
+      const step = Math.floor(total / words.length);
+      for (let i = 0; i < words.length; i++) {
+        wordTileIndices.add(Math.min(Math.round(step * i + step * 0.6), total - 1));
       }
     }
-    if (current) lines.push(current);
+    const wordTileArr = Array.from(wordTileIndices);
 
-    const totalH = lines.length * lineH;
-    const startY = H / 2 - totalH / 2;
-
-    // Glow background behind text
-    const pad = 40;
-    ctx.fillStyle = "rgba(0,0,0,0.3)";
-    ctx.beginPath();
-    const rx = W / 2 - maxW / 2 - pad;
-    const ry = startY - pad;
-    const rw = maxW + pad * 2;
-    const rh = totalH + pad * 2;
-    ctx.roundRect(rx, ry, rw, rh, 16);
-    ctx.fill();
-
-    // Draw each line
-    lines.forEach((line, i) => {
-      const y = startY + i * lineH + lineH / 2;
-      // Shadow
-      ctx.shadowColor  = "rgba(0,0,0,0.8)";
-      ctx.shadowBlur   = 20;
-      ctx.fillStyle    = "rgba(255,253,246,0.92)";
-      ctx.font         = "italic 300 42px 'Fraunces', serif";
-      ctx.fillText(line, W / 2, y);
-    });
-    ctx.shadowBlur = 0;
-
-    baseCanvasRef.current = base;
-  }, [quote]);
+    const grid: Tile[][] = [];
+    let linearIdx = 0;
+    for (let r = 0; r < rows; r++) {
+      grid[r] = [];
+      for (let c = 0; c < cols; c++) {
+        const wordIdx = wordTileArr.indexOf(linearIdx);
+        grid[r][c] = { col: c, row: r, revealed: false, flipProgress: 0, wordIndex: wordIdx };
+        linearIdx++;
+      }
+    }
+    tilesRef.current = grid;
+  }, [words]);
 
   // ── Load image
   useEffect(() => {
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.src = imageUrl.current;
-    img.onload = () => {
-      imgRef.current    = img;
-      imgLoadedRef.current = true;
-      buildBaseCanvas();
-    };
-    img.onerror = () => {
-      imgLoadedRef.current = false;
-      buildBaseCanvas();
-    };
+    img.onload  = () => { imgRef.current = img; imgLoadedRef.current = true; };
+    img.onerror = () => { imgLoadedRef.current = false; };
     imgRef.current = img;
-    return () => { img.onload = null; img.onerror = null; };
-  }, [buildBaseCanvas]);
+  }, []);
 
-  // ── Init overlay (dark scratch layer)
+  // ── Reveal a tile at grid coord
+  const revealTile = useCallback((col: number, row: number) => {
+    const grid = tilesRef.current;
+    if (!grid[row]?.[col]) return;
+    const tile = grid[row][col];
+    if (!tile.revealed) {
+      tile.revealed = true;
+      revealedCountRef.current++;
+      if (revealedCountRef.current > totalTilesRef.current * 0.5) setShowSave(true);
+      if (hint) setHint(false);
+    }
+  }, [hint]);
+
+  // ── Main render loop
   useEffect(() => {
-    const canvas = overlayCanvasRef.current;
+    const canvas = canvasRef.current;
     if (!canvas) return;
+    const ctx = canvas.getContext("2d")!;
+
     const resize = () => {
       canvas.width  = window.innerWidth;
       canvas.height = window.innerHeight;
-      buildBaseCanvas();
-      // Fill dark
-      const ctx = canvas.getContext("2d")!;
-      ctx.fillStyle = "#0a080c";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const cols = Math.ceil(canvas.width  / TILE_SIZE);
+      const rows = Math.ceil(canvas.height / TILE_SIZE);
+      buildGrid(cols, rows);
     };
     resize();
     window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
-  }, [buildBaseCanvas]);
-
-  // ── Scratch at a position (erase dark layer, reveal base beneath)
-  const scratch = useCallback((x: number, y: number, radius: number) => {
-    const canvas = overlayCanvasRef.current;
-    if (!canvas || !baseCanvasRef.current) return;
-    const ctx = canvas.getContext("2d")!;
-
-    // Composite: destination-out erases the dark overlay
-    ctx.save();
-    ctx.globalCompositeOperation = "destination-out";
-    const g = ctx.createRadialGradient(x, y, 0, x, y, radius);
-    g.addColorStop(0,   "rgba(0,0,0,1)");
-    g.addColorStop(0.6, "rgba(0,0,0,0.8)");
-    g.addColorStop(1,   "rgba(0,0,0,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }, []);
-
-  // ── Render loop: composite base + overlay on screen
-  useEffect(() => {
-    const canvas = overlayCanvasRef.current;
-    if (!canvas) return;
 
     const loop = () => {
       frameRef.current++;
-      if (frameRef.current % 2 === 0 && cameraReadyRef.current) detectMotion();
+      const W = canvas.width, H = canvas.height;
+      const cols = Math.ceil(W / TILE_SIZE);
+      const rows = Math.ceil(H / TILE_SIZE);
 
-      // Check reveal percentage every 30 frames
-      if (frameRef.current % 30 === 0) {
-        const ctx = canvas.getContext("2d")!;
-        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        let transparent = 0;
-        for (let i = 3; i < data.length; i += 4 * 8) { // sample every 8th pixel
-          if (data[i] < 128) transparent++;
+      if (frameRef.current % 2 === 0 && cameraReadyRef.current) detectMotion(cols, rows);
+
+      ctx.clearRect(0, 0, W, H);
+
+      // Draw base image first
+      if (imgRef.current && imgLoadedRef.current) {
+        const img = imgRef.current;
+        const iw = img.naturalWidth, ih = img.naturalHeight;
+        const scale = Math.max(W / iw, H / ih);
+        const dw = iw * scale, dh = ih * scale;
+        ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      } else {
+        const g = ctx.createLinearGradient(0, 0, W, H);
+        g.addColorStop(0, "#1a2a1a"); g.addColorStop(1, "#0d1a2e");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      // Dark overlay on image
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, W, H);
+
+      // Draw quote words that are revealed
+      const grid = tilesRef.current;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const tile = grid[r]?.[c];
+          if (!tile) continue;
+
+          // Animate flip progress
+          if (tile.revealed && tile.flipProgress < 1) {
+            tile.flipProgress = Math.min(1, tile.flipProgress + 0.12);
+          }
+
+          const tx = c * TILE_SIZE;
+          const ty = r * TILE_SIZE;
+          const fp = tile.flipProgress;
+
+          if (fp < 1) {
+            // Draw tile (Win95 raised style)
+            // Scale X: 1 → 0 (first half of flip), 0 → 1 revealed (second half)
+            const scaleX = fp < 0.5 ? 1 - fp * 2 : (fp - 0.5) * 2;
+            const midX = tx + TILE_SIZE / 2;
+
+            ctx.save();
+            ctx.translate(midX, ty);
+            ctx.scale(scaleX, 1);
+
+            if (fp < 0.5) {
+              // Tile face (closed)
+              ctx.fillStyle = "#C0C0C0";
+              ctx.fillRect(-TILE_SIZE / 2, 0, TILE_SIZE, TILE_SIZE);
+              // Raised border top+left (highlight)
+              ctx.fillStyle = "#ffffff";
+              ctx.fillRect(-TILE_SIZE / 2, 0, TILE_SIZE, 2);
+              ctx.fillRect(-TILE_SIZE / 2, 0, 2, TILE_SIZE);
+              // Raised border bottom+right (shadow)
+              ctx.fillStyle = "#808080";
+              ctx.fillRect(-TILE_SIZE / 2, TILE_SIZE - 2, TILE_SIZE, 2);
+              ctx.fillRect(TILE_SIZE / 2 - 2, 0, 2, TILE_SIZE);
+              ctx.fillStyle = "#404040";
+              ctx.fillRect(-TILE_SIZE / 2 + 1, TILE_SIZE - 1, TILE_SIZE - 1, 1);
+              ctx.fillRect(TILE_SIZE / 2 - 1, 1, 1, TILE_SIZE - 1);
+            }
+            ctx.restore();
+          }
+
+          // Draw word if this is a word tile and fully revealed
+          if (tile.wordIndex >= 0 && tile.revealed && words[tile.wordIndex]) {
+            const word = words[tile.wordIndex];
+            const wordOpacity = Math.max(0, (fp - 0.5) * 2);
+            if (wordOpacity > 0) {
+              ctx.save();
+              ctx.globalAlpha = wordOpacity;
+              const fontSize = Math.min(28, TILE_SIZE * 0.55);
+              ctx.font = `italic ${fontSize}px 'Fraunces', serif`;
+              ctx.fillStyle = "#FFFDF6";
+              ctx.shadowColor = "rgba(0,0,0,0.9)";
+              ctx.shadowBlur  = 14;
+              ctx.textAlign    = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillText(word, tx + TILE_SIZE / 2, ty + TILE_SIZE / 2);
+              ctx.restore();
+            }
+          }
         }
-        const ratio = transparent / (data.length / (4 * 8));
-        revealedRef.current = ratio;
-        if (ratio > 0.55 && !showSave) setShowSave(true);
-        if (ratio > 0.05 && hint) setHint(false);
       }
 
       rafRef.current = requestAnimationFrame(loop);
     };
-    rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [showSave, hint, scratch]);
 
-  // ── Motion detection → scratch where movement is
-  const detectMotion = () => {
+    rafRef.current = requestAnimationFrame(loop);
+    return () => { cancelAnimationFrame(rafRef.current); window.removeEventListener("resize", resize); };
+  }, [buildGrid, words, hint]);
+
+  // ── Motion detection → reveal tiles
+  const detectMotion = (cols: number, rows: number) => {
     if (!videoRef.current || !motionCanvasRef.current) return;
     const mctx = motionCanvasRef.current.getContext("2d");
     if (!mctx) return;
-    const W = 64, H = 48;
-    motionCanvasRef.current.width  = W;
-    motionCanvasRef.current.height = H;
-    try { mctx.drawImage(videoRef.current, 0, 0, W, H); } catch { return; }
+    const MW = 64, MH = 48;
+    motionCanvasRef.current.width  = MW;
+    motionCanvasRef.current.height = MH;
+    try { mctx.drawImage(videoRef.current, 0, 0, MW, MH); } catch { return; }
     let current: Uint8ClampedArray;
-    try { current = mctx.getImageData(0, 0, W, H).data; } catch { return; }
+    try { current = mctx.getImageData(0, 0, MW, MH).data; } catch { return; }
 
     if (prevFrameRef.current) {
       const prev = prevFrameRef.current;
       const SW = window.innerWidth, SH = window.innerHeight;
 
-      for (let py = 0; py < H; py += 1) {
-        for (let px = 0; px < W; px += 1) {
-          const pidx = (py * W + px) * 4;
+      for (let my = 0; my < MH; my++) {
+        for (let mx = 0; mx < MW; mx++) {
+          const pidx = (my * MW + mx) * 4;
           const diff =
             Math.abs(current[pidx]   - prev[pidx])   +
             Math.abs(current[pidx+1] - prev[pidx+1]) +
             Math.abs(current[pidx+2] - prev[pidx+2]);
 
-          if (diff > 20) {
-            // Mirror x — camera is flipped
-            const sx = (1 - px / W) * SW;
-            const sy = (py / H) * SH;
-            const radius = brushSizeRef.current * (0.5 + (diff / 255) * 0.8);
-            scratch(sx, sy, radius);
+          if (diff > 22) {
+            // Mirror x
+            const sx = (1 - mx / MW) * SW;
+            const sy = (my / MH) * SH;
+            const col = Math.floor(sx / TILE_SIZE);
+            const row = Math.floor(sy / TILE_SIZE);
+            // Also reveal neighbors for satisfying spread
+            revealTile(col, row);
+            if (diff > 45) {
+              revealTile(col - 1, row);
+              revealTile(col + 1, row);
+              revealTile(col, row - 1);
+              revealTile(col, row + 1);
+            }
           }
         }
       }
@@ -255,19 +270,21 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
 
   // ── Mouse fallback
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (cameraState === "active") return; // camera handles it
-    scratch(e.clientX, e.clientY, brushSizeRef.current * 1.2);
+    if (cameraState === "active") return;
+    const col = Math.floor(e.clientX / TILE_SIZE);
+    const row = Math.floor(e.clientY / TILE_SIZE);
+    revealTile(col, row);
+    revealTile(col - 1, row); revealTile(col + 1, row);
+    revealTile(col, row - 1); revealTile(col, row + 1);
   };
 
-  // ── Camera start
+  // ── Camera
   useEffect(() => {
     const start = async () => {
       setCameraState("requesting");
       if (!navigator.mediaDevices?.getUserMedia) { setCameraState("error"); return; }
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: "user" },
-        });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -281,88 +298,65 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
       }
     };
     start();
-    return () => {
-      cameraReadyRef.current = false;
-      streamRef.current?.getTracks().forEach(t => t.stop());
-    };
+    return () => { cameraReadyRef.current = false; streamRef.current?.getTracks().forEach(t => t.stop()); };
   }, []);
 
   return createPortal(
     <div
-      style={{ position: "fixed", inset: 0, zIndex: 9500, cursor: cameraState === "active" ? "none" : "crosshair" }}
+      style={{ position: "fixed", inset: 0, zIndex: 9500, cursor: cameraState === "active" ? "none" : "default" }}
       onMouseMove={handleMouseMove}
     >
-      {/* Base layer: image + quote (always visible beneath) */}
-      {baseCanvasRef.current && (
-        <canvas
-          ref={el => {
-            if (el && baseCanvasRef.current) {
-              el.width  = baseCanvasRef.current.width;
-              el.height = baseCanvasRef.current.height;
-              el.getContext("2d")!.drawImage(baseCanvasRef.current, 0, 0);
-            }
-          }}
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
-        />
-      )}
-
-      {/* Scratch overlay */}
-      <canvas
-        ref={overlayCanvasRef}
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
-      />
-
-      {/* Hidden camera + motion canvas */}
+      <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
       <video ref={videoRef} muted playsInline style={{ display: "none" }} />
       <canvas ref={motionCanvasRef} style={{ display: "none" }} />
 
-      {/* Loading spinner */}
+      {/* Loading */}
       {(cameraState === "idle" || cameraState === "requesting") && (
         <div style={{
           position: "absolute", inset: 0, display: "flex", flexDirection: "column",
           alignItems: "center", justifyContent: "center", gap: 14, pointerEvents: "none",
+          background: "#C0C0C0",
         }}>
-          <div style={{ width: 44, height: 44, border: "2px solid rgba(255,255,255,0.15)", borderTopColor: "rgba(255,255,255,0.7)", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
-          <div style={{ fontFamily: "'VT323', monospace", fontSize: 16, color: "rgba(255,255,255,0.4)", letterSpacing: 1 }}>
-            {cameraState === "requesting" ? "opening the lens..." : "starting..."}
-          </div>
+          <div style={{ width: 44, height: 44, border: "2px solid #808080", borderTopColor: "#000080", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+          <div style={{ fontFamily: "'VT323', monospace", fontSize: 18, color: "#000080" }}>opening the lens...</div>
         </div>
       )}
 
-      {/* Instructions */}
+      {/* Hint */}
       {hint && cameraState === "active" && (
         <div style={{
-          position: "absolute", bottom: 110, left: "50%", transform: "translateX(-50%)",
-          textAlign: "center", pointerEvents: "none",
-          animation: "fadeInUp 0.8s ease both",
+          position: "absolute", bottom: 100, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(0,0,128,0.85)", color: "#fff",
+          fontFamily: "'VT323', monospace", fontSize: 18,
+          padding: "10px 24px", letterSpacing: 0.8,
+          border: "2px solid", borderColor: "#fff #555 #555 #fff",
+          pointerEvents: "none", whiteSpace: "nowrap",
+          animation: "fadeInUp 0.6s ease both",
         }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>\u270B</div>
-          <div style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontStyle: "italic", color: "rgba(255,255,255,0.5)", lineHeight: 1.6 }}>
-            move your hands to reveal<br />
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.28)" }}>what's waiting beneath</span>
-          </div>
+          \u270B move your body — uncover the message
         </div>
       )}
 
-      {/* Camera denied — mouse fallback message */}
-      {(cameraState === "denied" || cameraState === "error") && hint && (
+      {/* Mouse fallback hint */}
+      {hint && (cameraState === "denied" || cameraState === "error") && (
         <div style={{
-          position: "absolute", bottom: 110, left: "50%", transform: "translateX(-50%)",
-          textAlign: "center", pointerEvents: "none",
+          position: "absolute", bottom: 100, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(0,0,128,0.85)", color: "#fff",
+          fontFamily: "'VT323', monospace", fontSize: 18,
+          padding: "10px 24px", letterSpacing: 0.8,
+          border: "2px solid", borderColor: "#fff #555 #555 #fff",
+          pointerEvents: "none", whiteSpace: "nowrap",
         }}>
-          <div style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontStyle: "italic", color: "rgba(255,255,255,0.5)", lineHeight: 1.6 }}>
-            drag your mouse to scratch<br />
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.28)" }}>what's waiting beneath</span>
-          </div>
+          \uD83D\uDDB1 move your mouse to uncover
         </div>
       )}
 
       {/* Language */}
       {langOpt && (
         <div style={{
-          position: "fixed", bottom: 32, left: "50%", transform: "translateX(-50%)",
+          position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)",
           fontFamily: "'VT323', monospace", fontSize: 13,
-          color: "rgba(255,255,255,0.2)", letterSpacing: 0.8,
+          color: "rgba(255,255,255,0.25)", letterSpacing: 0.8,
           whiteSpace: "nowrap", pointerEvents: "none",
         }}>
           {langOpt.flag} {langOpt.label}
@@ -373,11 +367,11 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
       <div onClick={onClose} style={{
         position: "fixed", top: 22, right: 26,
         fontFamily: "'VT323', monospace", fontSize: 15,
-        color: "rgba(255,255,255,0.2)", cursor: "pointer", letterSpacing: 0.5,
-        transition: "color 0.2s", zIndex: 9501,
+        color: "rgba(255,255,255,0.3)", cursor: "pointer",
+        transition: "color 0.2s", zIndex: 9501, letterSpacing: 0.5,
       }}
-        onMouseEnter={e => (e.currentTarget.style.color = "rgba(255,255,255,0.7)")}
-        onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.2)")}
+        onMouseEnter={e => (e.currentTarget.style.color = "#fff")}
+        onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.3)")}
       >
         \u2715 skip
       </div>
@@ -385,19 +379,19 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
       {/* Save */}
       {showSave && (
         <button onClick={() => onComplete(quote)} style={{
-          position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)",
-          background: "rgba(0,0,0,0.55)",
-          border: "1px solid rgba(255,255,255,0.3)",
-          color: "rgba(255,253,246,0.9)",
-          padding: "9px 36px",
+          position: "fixed", bottom: 18, left: "50%", transform: "translateX(-50%)",
+          background: "#C0C0C0",
+          border: "2px solid", borderColor: "#fff #555 #555 #fff",
+          color: "#000",
+          padding: "8px 32px",
           fontFamily: "'VT323', monospace", fontSize: 20,
-          cursor: "pointer", letterSpacing: 1, borderRadius: 3,
-          backdropFilter: "blur(8px)",
-          animation: "fadeInUp 0.6s ease both",
+          cursor: "pointer", letterSpacing: 1,
+          boxShadow: "2px 2px 0 #808080",
+          animation: "fadeInUp 0.5s ease both",
           zIndex: 9502,
         }}
-          onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; }}
-          onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.55)"; }}
+          onMouseDown={e => { e.currentTarget.style.borderColor = "#555 #fff #fff #555"; e.currentTarget.style.transform = "translateX(-50%) translateY(1px)"; }}
+          onMouseUp={e   => { e.currentTarget.style.borderColor = "#fff #555 #555 #fff"; e.currentTarget.style.transform = "translateX(-50%)"; }}
         >
           \u2726 save this quote
         </button>
@@ -406,7 +400,7 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes fadeInUp {
-          from { opacity:0; transform:translateX(-50%) translateY(14px); }
+          from { opacity:0; transform:translateX(-50%) translateY(12px); }
           to   { opacity:1; transform:translateX(-50%) translateY(0); }
         }
       `}</style>
