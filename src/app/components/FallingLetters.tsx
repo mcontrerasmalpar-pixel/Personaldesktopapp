@@ -1,53 +1,20 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { LANGUAGE_OPTIONS, resolveLanguage } from "./quotes";
 
-// ── References: graaatio-style motion painting
-// Letters from the quote are "painted" by your body movement in front of the camera.
-// Motion detection → ink-like colored trails → letters emerge from those trails.
-// No camera permission = fallback mouse paint mode.
+// Scratch-card reveal experience:
+// ─ Canvas layer 1 (bottom): beautiful nature image + quote text centered
+// ─ Canvas layer 2 (top):    solid dark overlay
+// Movement from camera (or mouse) erases the dark layer → revealing the image + quote beneath
+// Like scratching a lottery card with your body.
 
-const RANSOM_FONTS = [
-  "'Abril Fatface', cursive",
-  "'Fraunces', serif",
-  "'VT323', monospace",
-  "'Pacifico', cursive",
-  "'Courier Prime', monospace",
+const NATURE_IMAGES = [
+  "https://images.unsplash.com/photo-1490750967868-88df5691cc99?w=1600&q=80", // pink flowers field
+  "https://images.unsplash.com/photo-1465146344425-f00d5f5c8f07?w=1600&q=80", // orange wildflowers
+  "https://images.unsplash.com/photo-1497250681960-ef046c08a56e?w=1600&q=80", // misty forest
+  "https://images.unsplash.com/photo-1501854140801-50d01698950b?w=1600&q=80", // aerial mountain meadow
+  "https://images.unsplash.com/photo-1470770841072-f978cf4d019e?w=1600&q=80", // lake reflection
 ];
-
-const INK_COLORS = [
-  "#F4C97F",  // warm gold
-  "#FF6B9D",  // pink
-  "#7EC8E3",  // cyan
-  "#B5EAD7",  // mint
-  "#FFDAC1",  // peach
-  "#C7CEEA",  // lavender
-  "#FF9AA2",  // coral
-];
-
-interface Letter {
-  char: string;
-  x: number;
-  y: number;
-  color: string;
-  font: string;
-  size: number;
-  rotation: number;
-  opacity: number;
-  targetOpacity: number;
-  vx: number;
-  vy: number;
-  spawned: boolean;
-}
-
-interface Trail {
-  x: number;
-  y: number;
-  color: string;
-  radius: number;
-  opacity: number;
-  age: number;
-}
 
 interface Props {
   quote: string;
@@ -57,129 +24,200 @@ interface Props {
 }
 
 export function FallingLetters({ quote, language, onComplete, onClose }: Props) {
-  const canvasRef       = useRef<HTMLCanvasElement>(null);
-  const videoRef        = useRef<HTMLVideoElement>(null);
-  const motionCanvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef       = useRef<MediaStream | null>(null);
-  const rafRef          = useRef<number>(0);
-  const prevFrameRef    = useRef<Uint8ClampedArray | null>(null);
-  const cameraReadyRef  = useRef(false);
-  const frameRef        = useRef(0);
-
-  // Letters state
-  const lettersRef = useRef<Letter[]>([]);
-  const trailsRef  = useRef<Trail[]>([]);
-  const nextLetterIdxRef = useRef(0);  // which char to spawn next
-  const motionEnergyRef  = useRef(0);  // accumulated motion for spawning
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null); // dark scratch layer
+  const videoRef         = useRef<HTMLVideoElement>(null);
+  const motionCanvasRef  = useRef<HTMLCanvasElement>(null);
+  const streamRef        = useRef<MediaStream | null>(null);
+  const rafRef           = useRef<number>(0);
+  const prevFrameRef     = useRef<Uint8ClampedArray | null>(null);
+  const cameraReadyRef   = useRef(false);
+  const frameRef         = useRef(0);
+  const revealedRef      = useRef(0); // 0→1 percentage revealed
+  const imgRef           = useRef<HTMLImageElement | null>(null);
+  const imgLoadedRef     = useRef(false);
+  const brushSizeRef     = useRef(90); // radius of scratch brush
 
   const [cameraState, setCameraState] = useState<"idle" | "requesting" | "active" | "error" | "denied">("idle");
-  const [allSpawned, setAllSpawned]    = useState(false);
+  const [showSave, setShowSave]       = useState(false);
+  const [hint, setHint]               = useState(true);
 
-  const chars = quote.split("").filter(c => c.trim() !== "");
-  const words = quote.split(" ");
+  // Pick a random nature image
+  const imageUrl = useRef(NATURE_IMAGES[Math.floor(Math.random() * NATURE_IMAGES.length)]);
 
-  // ── Spawn a letter at a screen position
-  const spawnLetter = (x: number, y: number) => {
-    const idx = nextLetterIdxRef.current;
-    if (idx >= chars.length) { setAllSpawned(true); return; }
-    const color = INK_COLORS[Math.floor(Math.random() * INK_COLORS.length)];
-    lettersRef.current.push({
-      char:  chars[idx],
-      x:     x + (Math.random() - 0.5) * 60,
-      y:     y + (Math.random() - 0.5) * 60,
-      color,
-      font:  RANSOM_FONTS[Math.floor(Math.random() * RANSOM_FONTS.length)],
-      size:  28 + Math.floor(Math.random() * 26),
-      rotation: (Math.random() - 0.5) * 30,
-      opacity: 0,
-      targetOpacity: 0.85 + Math.random() * 0.15,
-      vx:  (Math.random() - 0.5) * 1.2,
-      vy: -0.6 - Math.random() * 0.8,
-      spawned: true,
+  const resolvedLang = resolveLanguage(language);
+  const langOpt = LANGUAGE_OPTIONS.find(l => l.id === resolvedLang);
+
+  // ── Draw the base scene (image + quote) on a separate offscreen canvas
+  const baseCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const buildBaseCanvas = useCallback(() => {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const base = document.createElement("canvas");
+    base.width  = W;
+    base.height = H;
+    const ctx = base.getContext("2d")!;
+
+    // Draw image cover-fit
+    if (imgRef.current && imgLoadedRef.current) {
+      const img = imgRef.current;
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      const scale = Math.max(W / iw, H / ih);
+      const dw = iw * scale, dh = ih * scale;
+      const dx = (W - dw) / 2, dy = (H - dh) / 2;
+      ctx.drawImage(img, dx, dy, dw, dh);
+    } else {
+      // Fallback gradient
+      const g = ctx.createLinearGradient(0, 0, W, H);
+      g.addColorStop(0, "#1a0533");
+      g.addColorStop(0.5, "#2d1b69");
+      g.addColorStop(1, "#0d3b2e");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Dark overlay on image so quote is readable
+    ctx.fillStyle = "rgba(0,0,0,0.38)";
+    ctx.fillRect(0, 0, W, H);
+
+    // Quote text — centered, word wrap, beautiful
+    const words = quote.split(" ");
+    const maxW  = Math.min(700, W * 0.75);
+    const lineH = 62;
+    ctx.textAlign    = "center";
+    ctx.textBaseline = "middle";
+
+    // Build lines
+    const lines: string[] = [];
+    let current = "";
+    ctx.font = "italic 400 42px 'Fraunces', serif";
+    for (const w of words) {
+      const test = current ? current + " " + w : w;
+      if (ctx.measureText(test).width > maxW && current) {
+        lines.push(current);
+        current = w;
+      } else {
+        current = test;
+      }
+    }
+    if (current) lines.push(current);
+
+    const totalH = lines.length * lineH;
+    const startY = H / 2 - totalH / 2;
+
+    // Glow background behind text
+    const pad = 40;
+    ctx.fillStyle = "rgba(0,0,0,0.3)";
+    ctx.beginPath();
+    const rx = W / 2 - maxW / 2 - pad;
+    const ry = startY - pad;
+    const rw = maxW + pad * 2;
+    const rh = totalH + pad * 2;
+    ctx.roundRect(rx, ry, rw, rh, 16);
+    ctx.fill();
+
+    // Draw each line
+    lines.forEach((line, i) => {
+      const y = startY + i * lineH + lineH / 2;
+      // Shadow
+      ctx.shadowColor  = "rgba(0,0,0,0.8)";
+      ctx.shadowBlur   = 20;
+      ctx.fillStyle    = "rgba(255,253,246,0.92)";
+      ctx.font         = "italic 300 42px 'Fraunces', serif";
+      ctx.fillText(line, W / 2, y);
     });
-    nextLetterIdxRef.current = idx + 1;
-    if (idx + 1 >= chars.length) setAllSpawned(true);
-  };
+    ctx.shadowBlur = 0;
 
-  // ── Render loop (canvas)
+    baseCanvasRef.current = base;
+  }, [quote]);
+
+  // ── Load image
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d")!;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = imageUrl.current;
+    img.onload = () => {
+      imgRef.current    = img;
+      imgLoadedRef.current = true;
+      buildBaseCanvas();
+    };
+    img.onerror = () => {
+      imgLoadedRef.current = false;
+      buildBaseCanvas();
+    };
+    imgRef.current = img;
+    return () => { img.onload = null; img.onerror = null; };
+  }, [buildBaseCanvas]);
 
-    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+  // ── Init overlay (dark scratch layer)
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
+    const resize = () => {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+      buildBaseCanvas();
+      // Fill dark
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "#0a080c";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    };
     resize();
     window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [buildBaseCanvas]);
+
+  // ── Scratch at a position (erase dark layer, reveal base beneath)
+  const scratch = useCallback((x: number, y: number, radius: number) => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas || !baseCanvasRef.current) return;
+    const ctx = canvas.getContext("2d")!;
+
+    // Composite: destination-out erases the dark overlay
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-out";
+    const g = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    g.addColorStop(0,   "rgba(0,0,0,1)");
+    g.addColorStop(0.6, "rgba(0,0,0,0.8)");
+    g.addColorStop(1,   "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }, []);
+
+  // ── Render loop: composite base + overlay on screen
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
 
     const loop = () => {
       frameRef.current++;
+      if (frameRef.current % 2 === 0 && cameraReadyRef.current) detectMotion();
 
-      // Motion detection every 2 frames
-      if (frameRef.current % 2 === 0 && cameraReadyRef.current) {
-        detectAndPaint();
-      }
-
-      // Fade canvas slightly — ink trail persistence
-      ctx.fillStyle = "rgba(10, 8, 12, 0.18)";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Draw trails
-      const trails = trailsRef.current;
-      for (let i = trails.length - 1; i >= 0; i--) {
-        const t = trails[i];
-        t.opacity -= 0.012;
-        t.age++;
-        if (t.opacity <= 0) { trails.splice(i, 1); continue; }
-        ctx.beginPath();
-        const grad = ctx.createRadialGradient(t.x, t.y, 0, t.x, t.y, t.radius);
-        grad.addColorStop(0, hexAlpha(t.color, t.opacity * 0.7));
-        grad.addColorStop(1, hexAlpha(t.color, 0));
-        ctx.fillStyle = grad;
-        ctx.arc(t.x, t.y, t.radius, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Draw letters
-      const letters = lettersRef.current;
-      for (const l of letters) {
-        // Fade in
-        if (l.opacity < l.targetOpacity) l.opacity = Math.min(l.targetOpacity, l.opacity + 0.04);
-        // Gentle float
-        l.x += l.vx;
-        l.y += l.vy;
-        l.vx *= 0.98;
-        l.vy *= 0.98;
-        // Keep on screen
-        if (l.x < 20) l.vx = Math.abs(l.vx);
-        if (l.x > canvas.width - 20) l.vx = -Math.abs(l.vx);
-        if (l.y < 20) l.vy = Math.abs(l.vy);
-        if (l.y > canvas.height - 60) l.vy = -Math.abs(l.vy);
-
-        ctx.save();
-        ctx.translate(l.x, l.y);
-        ctx.rotate((l.rotation * Math.PI) / 180);
-        ctx.globalAlpha = l.opacity;
-        ctx.font = `${l.size}px ${l.font}`;
-        ctx.fillStyle = l.color;
-        // Subtle glow
-        ctx.shadowColor = l.color;
-        ctx.shadowBlur  = 12;
-        ctx.fillText(l.char, 0, 0);
-        ctx.restore();
+      // Check reveal percentage every 30 frames
+      if (frameRef.current % 30 === 0) {
+        const ctx = canvas.getContext("2d")!;
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        let transparent = 0;
+        for (let i = 3; i < data.length; i += 4 * 8) { // sample every 8th pixel
+          if (data[i] < 128) transparent++;
+        }
+        const ratio = transparent / (data.length / (4 * 8));
+        revealedRef.current = ratio;
+        if (ratio > 0.55 && !showSave) setShowSave(true);
+        if (ratio > 0.05 && hint) setHint(false);
       }
 
       rafRef.current = requestAnimationFrame(loop);
     };
-
     rafRef.current = requestAnimationFrame(loop);
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      window.removeEventListener("resize", resize);
-    };
-  }, []);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [showSave, hint, scratch]);
 
-  // ── Motion detection → spawn ink trails + letters
-  const detectAndPaint = () => {
+  // ── Motion detection → scratch where movement is
+  const detectMotion = () => {
     if (!videoRef.current || !motionCanvasRef.current) return;
     const mctx = motionCanvasRef.current.getContext("2d");
     if (!mctx) return;
@@ -192,191 +230,139 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
 
     if (prevFrameRef.current) {
       const prev = prevFrameRef.current;
-      const canvas = canvasRef.current!;
-      let totalMotion = 0;
+      const SW = window.innerWidth, SH = window.innerHeight;
 
-      for (let py = 0; py < H; py += 2) {
-        for (let px = 0; px < W; px += 2) {
+      for (let py = 0; py < H; py += 1) {
+        for (let px = 0; px < W; px += 1) {
           const pidx = (py * W + px) * 4;
           const diff =
             Math.abs(current[pidx]   - prev[pidx])   +
             Math.abs(current[pidx+1] - prev[pidx+1]) +
             Math.abs(current[pidx+2] - prev[pidx+2]);
 
-          if (diff > 25) {
-            totalMotion += diff;
-            // Mirror horizontally (camera is flipped)
-            const screenX = (1 - px / W) * canvas.width;
-            const screenY = (py / H)     * canvas.height;
-            const colorIdx = Math.floor(Math.random() * INK_COLORS.length);
-            const color = INK_COLORS[colorIdx];
-            const radius = 18 + (diff / 255) * 40;
-
-            trailsRef.current.push({
-              x: screenX + (Math.random() - 0.5) * 20,
-              y: screenY + (Math.random() - 0.5) * 20,
-              color,
-              radius,
-              opacity: 0.4 + (diff / 255) * 0.5,
-              age: 0,
-            });
-
-            // Accumulate motion energy to spawn letters
-            motionEnergyRef.current += diff * 0.002;
-            if (motionEnergyRef.current >= 1 && nextLetterIdxRef.current < chars.length) {
-              motionEnergyRef.current = 0;
-              spawnLetter(screenX, screenY);
-            }
+          if (diff > 20) {
+            // Mirror x — camera is flipped
+            const sx = (1 - px / W) * SW;
+            const sy = (py / H) * SH;
+            const radius = brushSizeRef.current * (0.5 + (diff / 255) * 0.8);
+            scratch(sx, sy, radius);
           }
         }
       }
-      // Cap trails array
-      if (trailsRef.current.length > 600) trailsRef.current.splice(0, 100);
     }
     prevFrameRef.current = new Uint8ClampedArray(current);
   };
 
-  // ── Mouse/touch fallback paint (no camera)
-  const mouseRef = useRef(false);
+  // ── Mouse fallback
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (cameraState !== "error" && cameraState !== "denied") return;
-    const color = INK_COLORS[Math.floor(Math.random() * INK_COLORS.length)];
-    trailsRef.current.push({ x: e.clientX, y: e.clientY, color, radius: 28, opacity: 0.55, age: 0 });
-    motionEnergyRef.current += 0.15;
-    if (motionEnergyRef.current >= 1 && nextLetterIdxRef.current < chars.length) {
-      motionEnergyRef.current = 0;
-      spawnLetter(e.clientX, e.clientY);
-    }
+    if (cameraState === "active") return; // camera handles it
+    scratch(e.clientX, e.clientY, brushSizeRef.current * 1.2);
   };
 
-  // ── Start camera
-  const startCamera = async () => {
-    setCameraState("requesting");
-    if (!navigator.mediaDevices?.getUserMedia) { setCameraState("error"); return; }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        cameraReadyRef.current = true;
-      }
-      setCameraState("active");
-    } catch (err: unknown) {
-      const name = (err as { name?: string })?.name ?? "";
-      setCameraState(name === "NotAllowedError" || name === "PermissionDeniedError" ? "denied" : "error");
-    }
-  };
-
+  // ── Camera start
   useEffect(() => {
-    startCamera();
+    const start = async () => {
+      setCameraState("requesting");
+      if (!navigator.mediaDevices?.getUserMedia) { setCameraState("error"); return; }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480, facingMode: "user" },
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+          cameraReadyRef.current = true;
+        }
+        setCameraState("active");
+      } catch (err: unknown) {
+        const name = (err as { name?: string })?.name ?? "";
+        setCameraState(name === "NotAllowedError" || name === "PermissionDeniedError" ? "denied" : "error");
+      }
+    };
+    start();
     return () => {
       cameraReadyRef.current = false;
       streamRef.current?.getTracks().forEach(t => t.stop());
     };
   }, []);
 
-  const resolvedLang = resolveLanguage(language);
-  const langOpt = LANGUAGE_OPTIONS.find(l => l.id === resolvedLang);
-
   return createPortal(
     <div
-      style={{ position: "fixed", inset: 0, zIndex: 9500, cursor: "crosshair" }}
+      style={{ position: "fixed", inset: 0, zIndex: 9500, cursor: cameraState === "active" ? "none" : "crosshair" }}
       onMouseMove={handleMouseMove}
     >
-      {/* Main canvas — dark bg + trails + letters */}
-      <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", background: "#0a080c" }} />
-
-      {/* Hidden motion detection canvas */}
-      <canvas ref={motionCanvasRef} style={{ display: "none" }} />
-
-      {/* Hidden camera feed */}
-      <video ref={videoRef} muted playsInline style={{ display: "none" }} />
-
-      {/* ── Camera state overlays ── */}
-      {cameraState === "idle" || cameraState === "requesting" ? (
-        <div style={{
-          position: "absolute", inset: 0,
-          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          gap: 16, pointerEvents: "none",
-        }}>
-          <div style={{ fontFamily: "'VT323', monospace", fontSize: 22, color: "rgba(255,255,255,0.5)", letterSpacing: 1 }}>
-            {cameraState === "requesting" ? "opening the lens..." : "preparing..."}
-          </div>
-          <div style={{ width: 48, height: 48, border: "2px solid rgba(244,201,127,0.4)", borderTopColor: "#F4C97F", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
-        </div>
-      ) : null}
-
-      {cameraState === "denied" && (
-        <div style={{
-          position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-60%)",
-          textAlign: "center", pointerEvents: "none",
-        }}>
-          <div style={{ fontFamily: "'VT323', monospace", fontSize: 18, color: "rgba(255,200,127,0.7)", lineHeight: 2 }}>
-            camera access denied
-          </div>
-          <div style={{ fontFamily: "'Fraunces', serif", fontSize: 13, fontStyle: "italic", color: "rgba(255,255,255,0.35)" }}>
-            move your mouse to paint the words instead
-          </div>
-        </div>
-      )}
-
-      {/* ── Instructions overlay (active camera) ── */}
-      {cameraState === "active" && nextLetterIdxRef.current === 0 && (
-        <div style={{
-          position: "absolute", top: "50%", left: "50%",
-          transform: "translate(-50%, -50%)",
-          textAlign: "center", pointerEvents: "none",
-          animation: "fadeInUp 0.8s ease both",
-        }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>✋</div>
-          <div style={{ fontFamily: "'Fraunces', serif", fontSize: 18, fontStyle: "italic", color: "rgba(255,253,246,0.55)", lineHeight: 1.7 }}>
-            move your hands<br />
-            <span style={{ fontSize: 13, color: "rgba(255,255,255,0.3)" }}>the words will follow</span>
-          </div>
-        </div>
-      )}
-
-      {/* ── Small live camera preview (corner) ── */}
-      {cameraState === "active" && (
-        <video
-          ref={videoRef}
-          muted
-          playsInline
-          style={{
-            position: "fixed", bottom: 80, right: 20,
-            width: 100, height: 75,
-            borderRadius: 8,
-            opacity: 0.35,
-            transform: "scaleX(-1)",
-            objectFit: "cover",
-            border: "1px solid rgba(255,255,255,0.1)",
-            pointerEvents: "none",
+      {/* Base layer: image + quote (always visible beneath) */}
+      {baseCanvasRef.current && (
+        <canvas
+          ref={el => {
+            if (el && baseCanvasRef.current) {
+              el.width  = baseCanvasRef.current.width;
+              el.height = baseCanvasRef.current.height;
+              el.getContext("2d")!.drawImage(baseCanvasRef.current, 0, 0);
+            }
           }}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
         />
       )}
 
-      {/* ── Progress dots ── */}
-      <div style={{
-        position: "fixed", bottom: 56, left: "50%", transform: "translateX(-50%)",
-        display: "flex", gap: 4, flexWrap: "wrap", maxWidth: 400, justifyContent: "center",
-        pointerEvents: "none",
-      }}>
-        {chars.map((_, i) => (
-          <div key={i} style={{
-            width: 5, height: 5, borderRadius: "50%",
-            background: i < nextLetterIdxRef.current ? INK_COLORS[i % INK_COLORS.length] : "rgba(255,255,255,0.12)",
-            transition: "background 0.3s",
-          }} />
-        ))}
-      </div>
+      {/* Scratch overlay */}
+      <canvas
+        ref={overlayCanvasRef}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+      />
 
-      {/* Language attribution */}
+      {/* Hidden camera + motion canvas */}
+      <video ref={videoRef} muted playsInline style={{ display: "none" }} />
+      <canvas ref={motionCanvasRef} style={{ display: "none" }} />
+
+      {/* Loading spinner */}
+      {(cameraState === "idle" || cameraState === "requesting") && (
+        <div style={{
+          position: "absolute", inset: 0, display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center", gap: 14, pointerEvents: "none",
+        }}>
+          <div style={{ width: 44, height: 44, border: "2px solid rgba(255,255,255,0.15)", borderTopColor: "rgba(255,255,255,0.7)", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+          <div style={{ fontFamily: "'VT323', monospace", fontSize: 16, color: "rgba(255,255,255,0.4)", letterSpacing: 1 }}>
+            {cameraState === "requesting" ? "opening the lens..." : "starting..."}
+          </div>
+        </div>
+      )}
+
+      {/* Instructions */}
+      {hint && cameraState === "active" && (
+        <div style={{
+          position: "absolute", bottom: 110, left: "50%", transform: "translateX(-50%)",
+          textAlign: "center", pointerEvents: "none",
+          animation: "fadeInUp 0.8s ease both",
+        }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>\u270B</div>
+          <div style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontStyle: "italic", color: "rgba(255,255,255,0.5)", lineHeight: 1.6 }}>
+            move your hands to reveal<br />
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.28)" }}>what's waiting beneath</span>
+          </div>
+        </div>
+      )}
+
+      {/* Camera denied — mouse fallback message */}
+      {(cameraState === "denied" || cameraState === "error") && hint && (
+        <div style={{
+          position: "absolute", bottom: 110, left: "50%", transform: "translateX(-50%)",
+          textAlign: "center", pointerEvents: "none",
+        }}>
+          <div style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontStyle: "italic", color: "rgba(255,255,255,0.5)", lineHeight: 1.6 }}>
+            drag your mouse to scratch<br />
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.28)" }}>what's waiting beneath</span>
+          </div>
+        </div>
+      )}
+
+      {/* Language */}
       {langOpt && (
         <div style={{
-          position: "fixed", bottom: 30, left: "50%", transform: "translateX(-50%)",
+          position: "fixed", bottom: 32, left: "50%", transform: "translateX(-50%)",
           fontFamily: "'VT323', monospace", fontSize: 13,
-          color: "rgba(255,255,255,0.18)", letterSpacing: 0.8,
+          color: "rgba(255,255,255,0.2)", letterSpacing: 0.8,
           whiteSpace: "nowrap", pointerEvents: "none",
         }}>
           {langOpt.flag} {langOpt.label}
@@ -390,48 +376,41 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
         color: "rgba(255,255,255,0.2)", cursor: "pointer", letterSpacing: 0.5,
         transition: "color 0.2s", zIndex: 9501,
       }}
-        onMouseEnter={e => (e.currentTarget.style.color = "rgba(255,255,255,0.6)")}
+        onMouseEnter={e => (e.currentTarget.style.color = "rgba(255,255,255,0.7)")}
         onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.2)")}
       >
-        ✕ skip
+        \u2715 skip
       </div>
 
-      {/* Save — appears when all letters spawned */}
-      {allSpawned && (
+      {/* Save */}
+      {showSave && (
         <button onClick={() => onComplete(quote)} style={{
-          position: "fixed", bottom: 18, left: "50%", transform: "translateX(-50%)",
-          background: "transparent",
-          border: "1px solid rgba(244,201,127,0.4)",
-          color: "rgba(244,201,127,0.85)",
-          padding: "8px 34px",
+          position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(0,0,0,0.55)",
+          border: "1px solid rgba(255,255,255,0.3)",
+          color: "rgba(255,253,246,0.9)",
+          padding: "9px 36px",
           fontFamily: "'VT323', monospace", fontSize: 20,
-          cursor: "pointer", letterSpacing: 1, borderRadius: 2,
+          cursor: "pointer", letterSpacing: 1, borderRadius: 3,
+          backdropFilter: "blur(8px)",
           animation: "fadeInUp 0.6s ease both",
           zIndex: 9502,
         }}
-          onMouseEnter={e => { e.currentTarget.style.background = "rgba(244,201,127,0.1)"; }}
-          onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.55)"; }}
         >
-          ✦ save this quote
+          \u2726 save this quote
         </button>
       )}
 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes fadeInUp {
-          from { opacity: 0; transform: translateX(-50%) translateY(12px); }
-          to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+          from { opacity:0; transform:translateX(-50%) translateY(14px); }
+          to   { opacity:1; transform:translateX(-50%) translateY(0); }
         }
       `}</style>
     </div>,
     document.body
   );
-}
-
-// ── Utility: hex color + alpha → rgba string
-function hexAlpha(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1,3), 16);
-  const g = parseInt(hex.slice(3,5), 16);
-  const b = parseInt(hex.slice(5,7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
 }
