@@ -279,13 +279,12 @@ export function LoginScreen({ onLogin }: Props) {
         {/* Welcome banner above dialog */}
         <div style={{
           pointerEvents: "all",
-          marginBottom: 0,
+          marginBottom: 12,
           fontFamily: "'VT323', monospace",
           fontSize: 28,
           color: "#000080",
           textAlign: "center",
           letterSpacing: 1,
-          marginBottom: 12,
         }}>
           Welcome to Personal OS
         </div>
