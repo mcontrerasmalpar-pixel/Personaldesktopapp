@@ -9,22 +9,17 @@ interface Props {
   onMinimize: () => void;
   onFocus: () => void;
   zIndex: number;
+  isActive?: boolean; // fix #10 — active window highlight
   initialPosition?: { x: number; y: number };
   width?: number;
   minHeight?: number;
 }
 
 export function DraggableWindow({
-  title,
-  icon,
-  children,
-  onClose,
-  onMinimize,
-  onFocus,
-  zIndex,
+  title, icon, children, onClose, onMinimize, onFocus,
+  zIndex, isActive = false,
   initialPosition = { x: 120, y: 80 },
-  width = 520,
-  minHeight = 380,
+  width = 520, minHeight = 380,
 }: Props) {
   const [pos, setPos]             = useState(initialPosition);
   const [maximized, setMaximized] = useState(false);
@@ -36,7 +31,6 @@ export function DraggableWindow({
     e.preventDefault();
     onFocus();
     dragRef.current = { sx: e.clientX, sy: e.clientY, px: pos.x, py: pos.y };
-
     const move = (ev: MouseEvent) => {
       if (!dragRef.current) return;
       setPos({
@@ -57,26 +51,33 @@ export function DraggableWindow({
     ? { position: "fixed", left: 0, top: 36, width: "100vw", height: "calc(100vh - 36px)", zIndex }
     : { position: "fixed", left: pos.x, top: pos.y, width, minHeight, zIndex };
 
+  // fix #10: active window gets full-blue titlebar, inactive gets grey-blue
+  const titleBarBg = isActive
+    ? "linear-gradient(90deg, #000080 0%, #1084D0 100%)"
+    : "linear-gradient(90deg, #7A7A9A 0%, #9898B8 100%)";
+
   return (
     <div
       style={{
         ...windowStyle,
         border: "2px solid",
         borderColor: "#fff #555 #555 #fff",
-        boxShadow: "4px 4px 10px rgba(0,0,0,0.45)",
+        boxShadow: isActive
+          ? "4px 4px 14px rgba(0,0,128,0.35)"
+          : "2px 2px 6px rgba(0,0,0,0.25)",
         display: "flex",
         flexDirection: "column",
         userSelect: "none",
         overflow: "hidden",
         animation: "winOpen 0.15s ease-out",
+        transition: "box-shadow 0.15s",
       }}
       onClick={onFocus}
     >
-      {/* Windows-style title bar */}
       <div
         onMouseDown={handleTitleMouseDown}
         style={{
-          background: "linear-gradient(90deg, #000080 0%, #1084D0 100%)",
+          background: titleBarBg,
           color: "#fff",
           padding: "3px 4px 3px 6px",
           display: "flex",
@@ -86,48 +87,28 @@ export function DraggableWindow({
           flexShrink: 0,
           minHeight: 22,
           userSelect: "none",
+          transition: "background 0.15s",
         }}
       >
-        {/* Title left side */}
         <div style={{
           display: "flex", alignItems: "center", gap: 5,
-          fontFamily: "'VT323', monospace",
-          fontSize: 17,
-          fontWeight: 400,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
+          fontFamily: "'VT323', monospace", fontSize: 17, fontWeight: 400,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}>
           {icon && <span style={{ lineHeight: 1, flexShrink: 0, fontSize: 14 }}>{icon}</span>}
           {title.split(" — ")[0]}
         </div>
-
-        {/* Win-style buttons */}
         <div style={{ display: "flex", gap: 2, flexShrink: 0 }} className="win-ctrl">
           <WinBtn label="–" onClick={onMinimize} title="Minimize" />
           <WinBtn label="□" onClick={() => setMaximized(m => !m)} title="Maximize" />
           <WinBtn label="✕" onClick={onClose} title="Close" />
         </div>
       </div>
-
-      {/* Thin menu-bar separator */}
+      <div style={{ background: "#C0C0C0", borderBottom: "1px solid #808080", height: 2, flexShrink: 0 }} />
       <div style={{
-        background: "#C0C0C0",
-        borderBottom: "1px solid #808080",
-        height: 2,
-        flexShrink: 0,
-      }} />
-
-      {/* Content area */}
-      <div style={{
-        flex: 1,
-        overflow: "auto",
-        background: "#FFFDF6",
-        fontFamily: "'VT323', monospace",
-        fontSize: 16,
-        color: "#000",
-        padding: 10,
-        position: "relative",
+        flex: 1, overflow: "auto", background: "#FFFDF6",
+        fontFamily: "'VT323', monospace", fontSize: 16, color: "#000",
+        padding: 10, position: "relative",
       }}>
         {children}
       </div>
@@ -145,21 +126,13 @@ function WinBtn({ label, onClick, title }: { label: string; onClick: () => void;
       onMouseLeave={() => setPressed(false)}
       title={title}
       style={{
-        width: 16,
-        height: 14,
-        background: "#C0C0C0",
+        width: 16, height: 14, background: "#C0C0C0",
         border: "2px solid",
         borderColor: pressed ? "#555 #fff #fff #555" : "#fff #555 #555 #fff",
-        cursor: "pointer",
-        padding: 0,
-        fontFamily: "monospace",
-        fontSize: 10,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        lineHeight: 1,
-        flexShrink: 0,
-        transform: pressed ? "translate(1px, 1px)" : "none",
+        cursor: "pointer", padding: 0, fontFamily: "monospace", fontSize: 10,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        lineHeight: 1, flexShrink: 0,
+        transform: pressed ? "translate(1px,1px)" : "none",
         color: "#000",
       }}
     >
