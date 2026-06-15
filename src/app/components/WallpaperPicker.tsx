@@ -1,6 +1,8 @@
 import React, { useRef, useState } from "react";
 import { DraggableWindow } from "./DraggableWindow";
-import imgBliss from "../../imports/windows.jpg";
+
+// Public URL — replaces missing local ../../imports/windows.jpg
+const BLISS_URL = "https://upload.wikimedia.org/wikipedia/en/1/1e/Windowsxp.png";
 
 export type WallpaperOption = {
   id: string;
@@ -10,13 +12,12 @@ export type WallpaperOption = {
   mood?: "blooming" | "neutral" | "healing";
 };
 
-// Only Bliss is the built-in preset
 export const WALLPAPERS: WallpaperOption[] = [
   {
     id: "bliss",
     label: "Bliss (default)",
-    value: `url(${imgBliss}) center/cover no-repeat`,
-    thumb: `url(${imgBliss}) center/cover no-repeat`,
+    value: `url(${BLISS_URL}) center/cover no-repeat`,
+    thumb: `url(${BLISS_URL}) center/cover no-repeat`,
   },
 ];
 
@@ -100,9 +101,7 @@ export function WallpaperPicker({ current, onApply, onClose }: Props) {
           overflow: "hidden",
           display: "flex", alignItems: "flex-start", justifyContent: "center",
         }}>
-          {/* Simulated top taskbar */}
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 10, background: "#C0C0C0", borderBottom: "1px solid #808080" }} />
-          {/* Preview label */}
           <div style={{
             position: "absolute", top: "50%", left: "50%",
             transform: "translate(-50%, -50%)",
@@ -138,7 +137,6 @@ export function WallpaperPicker({ current, onApply, onClose }: Props) {
                 fontSize: 15,
               }}
             >
-              {/* Tiny thumbnail */}
               <div style={{
                 width: 32, height: 22,
                 background: wp.thumb ?? wp.value,
