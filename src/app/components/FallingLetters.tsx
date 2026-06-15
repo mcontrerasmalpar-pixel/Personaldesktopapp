@@ -2,10 +2,6 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { LANGUAGE_OPTIONS, resolveLanguage } from "./quotes";
 
-// Minesweeper-style tile reveal experience
-// Grid of Win95 tiles covers the screen
-// Camera motion in a zone flips that tile open → reveals nature image + quote beneath
-
 const NATURE_IMAGES = [
   "https://images.unsplash.com/photo-1490750967868-88df5691cc99?w=1600&q=80",
   "https://images.unsplash.com/photo-1465146344425-f00d5f5c8f07?w=1600&q=80",
@@ -14,14 +10,14 @@ const NATURE_IMAGES = [
   "https://images.unsplash.com/photo-1432958576632-8a39f6b97dc7?w=1600&q=80",
 ];
 
-const TILE_SIZE = 52; // px per tile
+const TILE_SIZE = 52;
 
 interface Tile {
   col: number;
   row: number;
   revealed: boolean;
-  flipProgress: number; // 0 = closed, 1 = open
-  wordIndex: number;    // which quote word appears here (-1 = none)
+  flipProgress: number;
+  wordIndex: number;
 }
 
 interface Props {
@@ -32,58 +28,52 @@ interface Props {
 }
 
 export function FallingLetters({ quote, language, onComplete, onClose }: Props) {
-  const canvasRef       = useRef<HTMLCanvasElement>(null);
-  const videoRef        = useRef<HTMLVideoElement>(null);
-  const motionCanvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef       = useRef<MediaStream | null>(null);
-  const rafRef          = useRef<number>(0);
-  const prevFrameRef    = useRef<Uint8ClampedArray | null>(null);
-  const cameraReadyRef  = useRef(false);
-  const frameRef        = useRef(0);
-  const imgRef          = useRef<HTMLImageElement | null>(null);
-  const imgLoadedRef    = useRef(false);
-  const tilesRef        = useRef<Tile[][]>([]);
+  const canvasRef        = useRef<HTMLCanvasElement>(null);
+  const videoRef         = useRef<HTMLVideoElement>(null);
+  const motionCanvasRef  = useRef<HTMLCanvasElement>(null);
+  const streamRef        = useRef<MediaStream | null>(null);
+  const rafRef           = useRef<number>(0);
+  const prevFrameRef     = useRef<Uint8ClampedArray | null>(null);
+  const cameraReadyRef   = useRef(false);
+  const frameRef         = useRef(0);
+  const imgRef           = useRef<HTMLImageElement | null>(null);
+  const imgLoadedRef     = useRef(false);
+  const tilesRef         = useRef<Tile[][]>([]);
   const revealedCountRef = useRef(0);
   const totalTilesRef    = useRef(1);
-  const imageUrl = useRef(NATURE_IMAGES[Math.floor(Math.random() * NATURE_IMAGES.length)]);
+  const imageUrl         = useRef(NATURE_IMAGES[Math.floor(Math.random() * NATURE_IMAGES.length)]);
 
-  const [cameraState, setCameraState] = useState<"idle" | "requesting" | "active" | "error" | "denied">("idle");
+  const [cameraState, setCameraState] = useState<"idle"|"requesting"|"active"|"error"|"denied">("idle");
   const [showSave, setShowSave]       = useState(false);
   const [hint, setHint]               = useState(true);
 
   const resolvedLang = resolveLanguage(language);
-  const langOpt = LANGUAGE_OPTIONS.find(l => l.id === resolvedLang);
-  const words = quote.split(" ").filter(Boolean);
+  const langOpt      = LANGUAGE_OPTIONS.find(l => l.id === resolvedLang);
+  const words        = quote.split(" ").filter(Boolean);
 
-  // ── Build tile grid
+  // Build tile grid
   const buildGrid = useCallback((cols: number, rows: number) => {
     const total = cols * rows;
     totalTilesRef.current = total;
-
-    // Pick evenly-spaced tiles to show each word
+    const step = Math.floor(total / Math.max(words.length, 1));
     const wordTileIndices = new Set<number>();
-    if (words.length > 0) {
-      const step = Math.floor(total / words.length);
-      for (let i = 0; i < words.length; i++) {
-        wordTileIndices.add(Math.min(Math.round(step * i + step * 0.6), total - 1));
-      }
+    for (let i = 0; i < words.length; i++) {
+      wordTileIndices.add(Math.min(Math.round(step * i + step * 0.6), total - 1));
     }
     const wordTileArr = Array.from(wordTileIndices);
-
     const grid: Tile[][] = [];
-    let linearIdx = 0;
+    let idx = 0;
     for (let r = 0; r < rows; r++) {
       grid[r] = [];
       for (let c = 0; c < cols; c++) {
-        const wordIdx = wordTileArr.indexOf(linearIdx);
-        grid[r][c] = { col: c, row: r, revealed: false, flipProgress: 0, wordIndex: wordIdx };
-        linearIdx++;
+        grid[r][c] = { col: c, row: r, revealed: false, flipProgress: 0, wordIndex: wordTileArr.indexOf(idx) };
+        idx++;
       }
     }
     tilesRef.current = grid;
   }, [words]);
 
-  // ── Load image
+  // Load image
   useEffect(() => {
     const img = new Image();
     img.crossOrigin = "anonymous";
@@ -93,7 +83,7 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
     imgRef.current = img;
   }, []);
 
-  // ── Reveal a tile at grid coord
+  // Reveal tile
   const revealTile = useCallback((col: number, row: number) => {
     const grid = tilesRef.current;
     if (!grid[row]?.[col]) return;
@@ -106,7 +96,7 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
     }
   }, [hint]);
 
-  // ── Main render loop
+  // Main render loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -130,61 +120,52 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
 
       if (frameRef.current % 2 === 0 && cameraReadyRef.current) detectMotion(cols, rows);
 
-      ctx.clearRect(0, 0, W, H);
+      // Always paint solid dark background first — no bleed-through
+      ctx.fillStyle = "#1a1a1a";
+      ctx.fillRect(0, 0, W, H);
 
-      // Draw base image first
+      // Draw nature image cover-fit
       if (imgRef.current && imgLoadedRef.current) {
         const img = imgRef.current;
         const iw = img.naturalWidth, ih = img.naturalHeight;
         const scale = Math.max(W / iw, H / ih);
         const dw = iw * scale, dh = ih * scale;
         ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
-      } else {
-        const g = ctx.createLinearGradient(0, 0, W, H);
-        g.addColorStop(0, "#1a2a1a"); g.addColorStop(1, "#0d1a2e");
-        ctx.fillStyle = g;
+        ctx.fillStyle = "rgba(0,0,0,0.38)";
         ctx.fillRect(0, 0, W, H);
       }
 
-      // Dark overlay on image
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(0, 0, W, H);
-
-      // Draw quote words that are revealed
+      // Draw tiles on top
       const grid = tilesRef.current;
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
           const tile = grid[r]?.[c];
           if (!tile) continue;
 
-          // Animate flip progress
           if (tile.revealed && tile.flipProgress < 1) {
-            tile.flipProgress = Math.min(1, tile.flipProgress + 0.12);
+            tile.flipProgress = Math.min(1, tile.flipProgress + 0.14);
           }
 
-          const tx = c * TILE_SIZE;
-          const ty = r * TILE_SIZE;
-          const fp = tile.flipProgress;
+          const fp  = tile.flipProgress;
+          const tx  = c * TILE_SIZE;
+          const ty  = r * TILE_SIZE;
+          const mid = tx + TILE_SIZE / 2;
 
           if (fp < 1) {
-            // Draw tile (Win95 raised style)
-            // Scale X: 1 → 0 (first half of flip), 0 → 1 revealed (second half)
             const scaleX = fp < 0.5 ? 1 - fp * 2 : (fp - 0.5) * 2;
-            const midX = tx + TILE_SIZE / 2;
-
             ctx.save();
-            ctx.translate(midX, ty);
+            ctx.translate(mid, ty);
             ctx.scale(scaleX, 1);
 
             if (fp < 0.5) {
-              // Tile face (closed)
+              // Tile face
               ctx.fillStyle = "#C0C0C0";
               ctx.fillRect(-TILE_SIZE / 2, 0, TILE_SIZE, TILE_SIZE);
-              // Raised border top+left (highlight)
+              // Highlight (top-left)
               ctx.fillStyle = "#ffffff";
               ctx.fillRect(-TILE_SIZE / 2, 0, TILE_SIZE, 2);
               ctx.fillRect(-TILE_SIZE / 2, 0, 2, TILE_SIZE);
-              // Raised border bottom+right (shadow)
+              // Shadow (bottom-right)
               ctx.fillStyle = "#808080";
               ctx.fillRect(-TILE_SIZE / 2, TILE_SIZE - 2, TILE_SIZE, 2);
               ctx.fillRect(TILE_SIZE / 2 - 2, 0, 2, TILE_SIZE);
@@ -195,21 +176,19 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
             ctx.restore();
           }
 
-          // Draw word if this is a word tile and fully revealed
+          // Draw word
           if (tile.wordIndex >= 0 && tile.revealed && words[tile.wordIndex]) {
-            const word = words[tile.wordIndex];
             const wordOpacity = Math.max(0, (fp - 0.5) * 2);
             if (wordOpacity > 0) {
               ctx.save();
-              ctx.globalAlpha = wordOpacity;
-              const fontSize = Math.min(28, TILE_SIZE * 0.55);
-              ctx.font = `italic ${fontSize}px 'Fraunces', serif`;
-              ctx.fillStyle = "#FFFDF6";
-              ctx.shadowColor = "rgba(0,0,0,0.9)";
-              ctx.shadowBlur  = 14;
-              ctx.textAlign    = "center";
-              ctx.textBaseline = "middle";
-              ctx.fillText(word, tx + TILE_SIZE / 2, ty + TILE_SIZE / 2);
+              ctx.globalAlpha    = wordOpacity;
+              ctx.font           = `italic 26px 'Fraunces', serif`;
+              ctx.fillStyle      = "#FFFDF6";
+              ctx.shadowColor    = "rgba(0,0,0,0.95)";
+              ctx.shadowBlur     = 16;
+              ctx.textAlign      = "center";
+              ctx.textBaseline   = "middle";
+              ctx.fillText(words[tile.wordIndex], tx + TILE_SIZE / 2, ty + TILE_SIZE / 2);
               ctx.restore();
             }
           }
@@ -223,7 +202,7 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
     return () => { cancelAnimationFrame(rafRef.current); window.removeEventListener("resize", resize); };
   }, [buildGrid, words, hint]);
 
-  // ── Motion detection → reveal tiles
+  // Motion detection
   const detectMotion = (cols: number, rows: number) => {
     if (!videoRef.current || !motionCanvasRef.current) return;
     const mctx = motionCanvasRef.current.getContext("2d");
@@ -238,7 +217,6 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
     if (prevFrameRef.current) {
       const prev = prevFrameRef.current;
       const SW = window.innerWidth, SH = window.innerHeight;
-
       for (let my = 0; my < MH; my++) {
         for (let mx = 0; mx < MW; mx++) {
           const pidx = (my * MW + mx) * 4;
@@ -246,20 +224,15 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
             Math.abs(current[pidx]   - prev[pidx])   +
             Math.abs(current[pidx+1] - prev[pidx+1]) +
             Math.abs(current[pidx+2] - prev[pidx+2]);
-
           if (diff > 22) {
-            // Mirror x
             const sx = (1 - mx / MW) * SW;
             const sy = (my / MH) * SH;
             const col = Math.floor(sx / TILE_SIZE);
             const row = Math.floor(sy / TILE_SIZE);
-            // Also reveal neighbors for satisfying spread
             revealTile(col, row);
             if (diff > 45) {
-              revealTile(col - 1, row);
-              revealTile(col + 1, row);
-              revealTile(col, row - 1);
-              revealTile(col, row + 1);
+              revealTile(col - 1, row); revealTile(col + 1, row);
+              revealTile(col, row - 1); revealTile(col, row + 1);
             }
           }
         }
@@ -268,7 +241,7 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
     prevFrameRef.current = new Uint8ClampedArray(current);
   };
 
-  // ── Mouse fallback
+  // Mouse fallback
   const handleMouseMove = (e: React.MouseEvent) => {
     if (cameraState === "active") return;
     const col = Math.floor(e.clientX / TILE_SIZE);
@@ -278,7 +251,7 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
     revealTile(col, row - 1); revealTile(col, row + 1);
   };
 
-  // ── Camera
+  // Camera
   useEffect(() => {
     const start = async () => {
       setCameraState("requesting");
@@ -313,11 +286,12 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
       {/* Loading */}
       {(cameraState === "idle" || cameraState === "requesting") && (
         <div style={{
-          position: "absolute", inset: 0, display: "flex", flexDirection: "column",
-          alignItems: "center", justifyContent: "center", gap: 14, pointerEvents: "none",
+          position: "absolute", inset: 0,
           background: "#C0C0C0",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14,
+          pointerEvents: "none",
         }}>
-          <div style={{ width: 44, height: 44, border: "2px solid #808080", borderTopColor: "#000080", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+          <div style={{ width: 40, height: 40, border: "2px solid #808080", borderTopColor: "#000080", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
           <div style={{ fontFamily: "'VT323', monospace", fontSize: 18, color: "#000080" }}>opening the lens...</div>
         </div>
       )}
@@ -326,32 +300,30 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
       {hint && cameraState === "active" && (
         <div style={{
           position: "absolute", bottom: 100, left: "50%", transform: "translateX(-50%)",
-          background: "rgba(0,0,128,0.85)", color: "#fff",
+          background: "rgba(0,0,128,0.9)", color: "#fff",
           fontFamily: "'VT323', monospace", fontSize: 18,
           padding: "10px 24px", letterSpacing: 0.8,
           border: "2px solid", borderColor: "#fff #555 #555 #fff",
           pointerEvents: "none", whiteSpace: "nowrap",
           animation: "fadeInUp 0.6s ease both",
         }}>
-          \u270B move your body — uncover the message
+          ✋ move your body — uncover the message
         </div>
       )}
 
-      {/* Mouse fallback hint */}
       {hint && (cameraState === "denied" || cameraState === "error") && (
         <div style={{
           position: "absolute", bottom: 100, left: "50%", transform: "translateX(-50%)",
-          background: "rgba(0,0,128,0.85)", color: "#fff",
+          background: "rgba(0,0,128,0.9)", color: "#fff",
           fontFamily: "'VT323', monospace", fontSize: 18,
           padding: "10px 24px", letterSpacing: 0.8,
           border: "2px solid", borderColor: "#fff #555 #555 #fff",
           pointerEvents: "none", whiteSpace: "nowrap",
         }}>
-          \uD83D\uDDB1 move your mouse to uncover
+          🖱 move your mouse to uncover
         </div>
       )}
 
-      {/* Language */}
       {langOpt && (
         <div style={{
           position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)",
@@ -367,13 +339,13 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
       <div onClick={onClose} style={{
         position: "fixed", top: 22, right: 26,
         fontFamily: "'VT323', monospace", fontSize: 15,
-        color: "rgba(255,255,255,0.3)", cursor: "pointer",
+        color: "rgba(255,255,255,0.4)", cursor: "pointer",
         transition: "color 0.2s", zIndex: 9501, letterSpacing: 0.5,
       }}
         onMouseEnter={e => (e.currentTarget.style.color = "#fff")}
-        onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.3)")}
+        onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.4)")}
       >
-        \u2715 skip
+        ✕ skip
       </div>
 
       {/* Save */}
@@ -388,12 +360,12 @@ export function FallingLetters({ quote, language, onComplete, onClose }: Props) 
           cursor: "pointer", letterSpacing: 1,
           boxShadow: "2px 2px 0 #808080",
           animation: "fadeInUp 0.5s ease both",
-          zIndex: 9502,
+          zIndex: 9502, whiteSpace: "nowrap",
         }}
-          onMouseDown={e => { e.currentTarget.style.borderColor = "#555 #fff #fff #555"; e.currentTarget.style.transform = "translateX(-50%) translateY(1px)"; }}
-          onMouseUp={e   => { e.currentTarget.style.borderColor = "#fff #555 #555 #fff"; e.currentTarget.style.transform = "translateX(-50%)"; }}
+          onMouseDown={e  => { e.currentTarget.style.borderColor = "#555 #fff #fff #555"; }}
+          onMouseUp={e    => { e.currentTarget.style.borderColor = "#fff #555 #555 #fff"; }}
         >
-          \u2726 save this quote
+          ✦ save this quote
         </button>
       )}
 
