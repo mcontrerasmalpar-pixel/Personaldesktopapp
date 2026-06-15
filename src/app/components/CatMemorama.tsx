@@ -1,32 +1,28 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 
-import img0  from "../../imports/Frame1-1/8290beb361f2f918d23f148bd4c874ce69940c0b.png";
-import img1  from "../../imports/Frame1-1/29a207e4627e60034f4d57eabc7bb53408a6c82c.png";
-import img2  from "../../imports/Frame1-1/7f037ac8baa5ce7b43bbfba695b5f904797ac445.png";
-import img3  from "../../imports/Frame1-1/155ef36af90e58801c16a04817ea3b7632f2cee4.png";
-import img4  from "../../imports/Frame1-1/0c9ae9958d0f771f73587574f87692b7e1acec8f.png";
-import img5  from "../../imports/Frame1-1/bf1293717eaec5ceeb88d37edb70bf24d6337b64.png";
-import img6  from "../../imports/Frame1-1/19461707422482b566c9741aa2451e43498c1ad6.png";
-import img7  from "../../imports/Frame1-1/d223bdb00478b75a07b7dfc6778727ad1bbcb928.png";
-import img8  from "../../imports/Frame1-1/7752d929eedc87e20d36367f49ba46ffc4039079.png";
-import img9  from "../../imports/Frame1-1/c59a2ac73c6c4ab2025eeba15a96818ebb1c3264.png";
-import img10 from "../../imports/Frame1-1/9048927d1369a0f2146d1d2fe7a1a56dc00b9d5d.png";
-import img11 from "../../imports/Frame1-1/0db8dbe064c933726336f1c1d37ac702f35dc3c6.png";
-import img12 from "../../imports/Frame1-1/231929759c332929d18fcc591e878f130701d06b.png";
-import img13 from "../../imports/Frame1-1/b8cdc93599538e2686597de262e905eb3af077b5.png";
-import img14 from "../../imports/Frame1-1/7cddc6d41c3643bbad2680b3800ad962525732bf.png";
-import img15 from "../../imports/Frame1-1/dbc0275b96b2c9cd319bc93f6db8d7cb792a9845.png";
-import img16 from "../../imports/Frame1-1/0bcf22e209590ed3e2acd61d658456e3ee8eb4a8.png";
-import img17 from "../../imports/Frame1-1/b9cc81c26c1fabd62bd6ee256b3ab0ca49b47333.png";
-import img18 from "../../imports/Frame1-1/3b020d6e348805c851e24f08df189f4d58e67bba.png";
-import img19 from "../../imports/Frame1-1/c1a569dacdf6cc307db01a1850001087ab00573b.png";
-
-const CAT_POOL = [
-  img0,  img1,  img2,  img3,  img4,
-  img5,  img6,  img7,  img8,  img9,
-  img10, img11, img12, img13, img14,
-  img15, img16, img17, img18, img19,
+// ── Cat images via public CDN (replaces missing local PNG assets) ───────────
+const CAT_POOL: string[] = [
+  "https://cataas.com/cat/says/nya?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/meow?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/hi?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/owo?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/uwu?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/:3?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/~?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/purrr?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/boop?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/omg?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/nap?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/help?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/ok?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/what?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/mood?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/yes?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/no?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/fine?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/sus?width=200&height=200&fontSize=40&fontColor=white",
+  "https://cataas.com/cat/says/cute?width=200&height=200&fontSize=40&fontColor=white",
 ];
 
 const WIN_MESSAGES = [
@@ -103,7 +99,6 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
 
       checkTimer.current = setTimeout(() => {
         if (a.pairId === b.pairId) {
-          // Match!
           const newMatched = matchedCount + 1;
           setCards(prev => prev.map(c =>
             c.uid === a.uid || c.uid === b.uid ? { ...c, matched: true } : c
@@ -120,7 +115,6 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
             winTimer.current = setTimeout(() => onComplete(), 2200);
           }
         } else {
-          // No match — flip back
           setCards(prev => prev.map(c =>
             c.uid === a.uid || c.uid === b.uid ? { ...c, flipped: false } : c
           ));
@@ -151,7 +145,6 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
       fontFamily: "'VT323', monospace",
       zIndex: 5000,
     }}>
-      {/* Win confetti layer */}
       <AnimatePresence>
         {showConfetti && (
           <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 9999, overflow: "hidden" }}>
@@ -174,7 +167,6 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
         )}
       </AnimatePresence>
 
-      {/* Win overlay (covers the dialog) */}
       <AnimatePresence>
         {won && (
           <motion.div
@@ -197,7 +189,6 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
               <div style={{ fontSize: 48, marginBottom: 8 }}>🐱</div>
               <div style={{ fontSize: 26, color: "#000080", marginBottom: 6 }}>{winMsg}</div>
               <div style={{ fontSize: 15, color: "#808080" }}>opening your archive...</div>
-              {/* Progress dots */}
               <div style={{ marginTop: 14, display: "flex", justifyContent: "center", gap: 6 }}>
                 {[0.2, 0.5, 0.8, 1.1].map((d, i) => (
                   <motion.div
@@ -213,7 +204,6 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
         )}
       </AnimatePresence>
 
-      {/* Dialog window */}
       <motion.div
         initial={{ scale: 0.85, opacity: 0, y: 12 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
@@ -226,7 +216,6 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
           userSelect: "none",
         }}
       >
-        {/* Title bar */}
         <div style={{
           background: "linear-gradient(90deg, #000080, #1084D0)",
           color: "#fff",
@@ -250,21 +239,14 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
           )}
         </div>
 
-        {/* Menu bar decoration */}
         <div style={{
           borderBottom: "1px solid #808080", borderTop: "1px solid #fff",
           padding: "1px 4px", background: "#C0C0C0", fontSize: 14,
           color: "#555",
         }} />
 
-        {/* Body */}
         <div style={{ padding: "14px 16px 18px" }}>
-
-          {/* Header */}
-          <div style={{
-            display: "flex", alignItems: "center", gap: 10, marginBottom: 6,
-          }}>
-            {/* reCAPTCHA-style badge */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
             <div style={{
               width: 38, height: 38, flexShrink: 0,
               background: "#4D9DE0",
@@ -284,13 +266,11 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
             </div>
           </div>
 
-          {/* Divider */}
           <div style={{
             height: 0, borderTop: "1px solid #808080", borderBottom: "1px solid #fff",
             margin: "10px 0",
           }} />
 
-          {/* 2×3 card grid */}
           <div style={{
             display: "grid",
             gridTemplateColumns: "repeat(3, 1fr)",
@@ -307,10 +287,7 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
             ))}
           </div>
 
-          {/* Progress dots */}
-          <div style={{
-            marginTop: 14, display: "flex", justifyContent: "center", gap: 8,
-          }}>
+          <div style={{ marginTop: 14, display: "flex", justifyContent: "center", gap: 8 }}>
             {[0, 1, 2].map(i => (
               <div key={i} style={{
                 width: 12, height: 12, borderRadius: "50%",
@@ -321,10 +298,7 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
             ))}
           </div>
 
-          {/* reCAPTCHA footer */}
-          <div style={{
-            marginTop: 12, fontSize: 12, color: "#808080", textAlign: "right",
-          }}>
+          <div style={{ marginTop: 12, fontSize: 12, color: "#808080", textAlign: "right" }}>
             personalOS · memorama.exe v1.0
           </div>
         </div>
@@ -338,21 +312,14 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
           transform-style: preserve-3d;
           transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
-        .memcard-inner.flipped {
-          transform: rotateY(180deg);
-        }
+        .memcard-inner.flipped { transform: rotateY(180deg); }
         .memcard-face {
           position: absolute;
           inset: 0;
           backface-visibility: hidden;
           -webkit-backface-visibility: hidden;
         }
-        .memcard-back {
-          /* default visible side */
-        }
-        .memcard-front {
-          transform: rotateY(180deg);
-        }
+        .memcard-front { transform: rotateY(180deg); }
         @keyframes cardBounce {
           0%   { transform: rotateY(180deg) scale(1); }
           30%  { transform: rotateY(180deg) scale(1.18); }
@@ -360,15 +327,12 @@ export function CatMemorama({ mood, onComplete, onClose }: Props) {
           80%  { transform: rotateY(180deg) scale(1.06); }
           100% { transform: rotateY(180deg) scale(1); }
         }
-        .memcard-inner.prize {
-          animation: cardBounce 0.6s ease-out forwards;
-        }
+        .memcard-inner.prize { animation: cardBounce 0.6s ease-out forwards; }
       `}</style>
     </div>
   );
 }
 
-/* ── Memory card ─────────────────────────────────────────────────────────── */
 function MemCard({ card, isPrize, onClick }: {
   card: CardState;
   isPrize: boolean;
@@ -387,7 +351,6 @@ function MemCard({ card, isPrize, onClick }: {
       }}
     >
       <div className={innerClass}>
-        {/* Back face — card face-down */}
         <div
           className="memcard-face memcard-back"
           style={{
@@ -400,15 +363,13 @@ function MemCard({ card, isPrize, onClick }: {
           <span style={{ fontSize: 32, color: "#fff", opacity: 0.9, fontFamily: "'VT323', monospace" }}>?</span>
         </div>
 
-        {/* Front face — cat meme */}
         <div
           className="memcard-face memcard-front"
           style={{
-            border: card.matched
-              ? "3px solid" : "3px solid",
             borderColor: card.matched
               ? "#52b788 #1b4332 #1b4332 #52b788"
               : "#fff #555 #555 #fff",
+            border: "3px solid",
             overflow: "hidden",
             background: "#f0f0f0",
           }}
